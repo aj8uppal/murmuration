@@ -9,12 +9,20 @@ const QUALITY = [
   { name: 'lavish',  particles: 1200000, scale: 1.00 },
 ];
 
-// A phone GPU will not carry the desktop defaults, and a 3x device pixel ratio
-// makes it worse rather than better. Start light and let the user climb.
+// A phone GPU will not carry the desktop particle counts, but it must still
+// render at native resolution: trimming pixels means upscaling a small buffer
+// onto a 3x screen, and the grains go soft. Pixels buy crispness, particles
+// buy density - so on a handheld, spend on pixels and cut the particles.
 const TOUCH = matchMedia('(pointer: coarse)').matches;
 const SMALL = Math.min(window.innerWidth, window.innerHeight) < 700;
 const HANDHELD = TOUCH && SMALL;
-const RESOLUTION_TRIM = HANDHELD ? 0.7 : 1;
+
+const HANDHELD_QUALITY = [
+  { name: 'calm',   particles: 110000, scale: 1 },
+  { name: 'full',   particles: 240000, scale: 1 },
+  { name: 'lavish', particles: 460000, scale: 1 },
+];
+const PRESETS = HANDHELD ? HANDHELD_QUALITY : QUALITY;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -27,7 +35,7 @@ class App {
     this.time = 0;
     this.lastFrame = performance.now();
     this.seedTime = Math.random() * 1000;
-    this.quality = readStored('murmuration.quality', HANDHELD ? 0 : 1);
+    this.quality = readStored('murmuration.quality', 1);
 
     this.pointer = { x: 0, y: 0, tx: 0, ty: 0 };
     this.cam = { zoom: 1, angle: 0, x: 0, y: 0, punch: 0 };
@@ -163,10 +171,10 @@ class App {
    * moment on the machine pins the user to the lowest preset for good.
    */
   #setQuality(index, { silent = false, persist = true } = {}) {
-    this.quality = Math.max(0, Math.min(QUALITY.length - 1, index));
+    this.quality = Math.max(0, Math.min(PRESETS.length - 1, index));
     if (persist) writeStored('murmuration.quality', this.quality);
-    const q = QUALITY[this.quality];
-    this.renderer.setResolutionScale(q.scale * RESOLUTION_TRIM);
+    const q = PRESETS[this.quality];
+    this.renderer.setResolutionScale(q.scale);
     this.renderer.setParticleCount(q.particles);
     $('#quality').textContent = q.name;
     if (!silent) this.#toast(`${q.name} · ${(q.particles / 1000).toFixed(0)}k particles`);

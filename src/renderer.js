@@ -438,7 +438,8 @@ export class Renderer {
   }
 
   resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // Capped at 3 so a phone renders natively; desktop Retina is 2 regardless.
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
     const w = Math.max(2, Math.floor(this.canvas.clientWidth * dpr * this.resolutionScale));
     const h = Math.max(2, Math.floor(this.canvas.clientHeight * dpr * this.resolutionScale));
     if (w === this.width && h === this.height) return;
