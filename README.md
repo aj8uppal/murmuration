@@ -1,5 +1,7 @@
 # Murmuration
 
+**[aj8uppal.github.io/murmuration](https://aj8uppal.github.io/murmuration/)**
+
 A WebGPU music visualiser.
 A million grains of light are pushed through a curl-noise flow field and forced by the music - not just by how loud it is, but by what it is doing: the key it is in, the tempo it keeps, the moment an instrument arrives, and the passages where it stops to breathe.
 
@@ -12,6 +14,8 @@ The flagship track is Patrick Watson's *Je te laisserai des mots*, but it reads 
 The same track sixteen seconds apart: a full passage, then the near-silent bar at 0:58. Nothing is scripted - the field thins, dims and slows because the music did.
 
 ## Run it
+
+Hosted at [aj8uppal.github.io/murmuration](https://aj8uppal.github.io/murmuration/), or locally:
 
 ```sh
 ./serve.sh          # http://localhost:8173
@@ -49,6 +53,8 @@ Then pick a source:
 | scroll | zoom |
 
 The chrome fades on its own after a few seconds of stillness.
+
+On a handheld the piece starts at the lightest preset and trims resolution, since a phone GPU will not carry the desktop defaults. Pinch replaces the scroll wheel.
 
 ## How it works
 
