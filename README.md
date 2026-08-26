@@ -94,6 +94,14 @@ The bus feeds three analysers, because the jobs want different windows. A 4096-b
 
 **Instrument entries.** Six log-spaced bands each carry a fast and a slow envelope. A band that had been quiet and suddenly is not registers as an arrival, with a cooldown so one entry does not fire repeatedly.
 
+**The voice.** Frequency bands cannot separate a vocal from a piano - on this track they share the same octaves. Stereo placement can: a lead vocal is mixed dead centre and an arrangement is spread wide, so `(L+R)` against `(L-R)` in the vocal band isolates the singer where a frequency split cannot.
+
+Two details decide whether this works. First, the comparison has to happen in energy rather than in dB: a dB gap says how much louder the centre is, which is the same number whether the passage is a whisper or a wall of strings, while summed energy says how much centred material there actually is. Second, the piano on this track is centre-panned too, so there is a large constant floor of centred energy and the vocal is the excursion above it - normalising against a running ceiling alone gave 1.4x separation between sung and instrumental passages, and tracking the floor as well gives 3.5x.
+
+A mono source has no side channel at all, which would make every bin look perfectly centred. Confidence tracks the track's overall stereo width, so mono files and microphone input report that the test is meaningless instead of claiming a permanent vocal.
+
+**Struck against held.** Per band, how far the fast envelope surges above that band's own running level. A piano and a string section can occupy the same octaves and still look nothing alike: the piano leaps above its own level on every strike and decays away, the strings sit on theirs. Measured on the flagship track this reads 0.71 percussive through the solo piano opening and 0.06 on the held strings.
+
 **Density and the breath.** Loudness alone does not say whether music is full: on this track the sub band sits near 0.5 even through a near-silent bar. So fullness is a perceptually weighted band average that leans on the upper middle. It is judged against the track's own running ceiling rather than an absolute one, so a quiet recording is not one long lull. Onset rate is deliberately a minor term - a sparse piano has *more* attacks per second than a sustained string swell, so leaning on it would call the quietest passage the busiest. The inverse of density is the lull, which rises gently and falls promptly, and drives the breath: the field opens out and slows as the music rests, then gathers as it returns.
 
 Traced across the flagship track under continuous playback, the breath lands where a listener would feel it:
@@ -153,5 +161,13 @@ The musical analysis has its own tests, driven by synthetic FFT frames with know
 ```sh
 npm test                  # node tools/test-analysis.mjs
 ```
+
+And a whole track can be run through the analysis offline, faster than real time:
+
+```sh
+node tools/analyse-track.mjs audio/je-te-laisserai-des-mots.mp3
+```
+
+This mirrors what the `AnalyserNode`s feed the analyser - same FFT sizes, window, dB mapping and smoothing - and prints a timeline plus a summary against the known vocal passages. It exists because the browser is the wrong place to validate this: the running ceilings need continuous playback to calibrate, so spot-probes on a freshly loaded page report whatever the last few seconds looked like, and a 165-second trace loses everything if the tab goes away. Eight seconds and repeatable beats three minutes and fragile.
 
 It reports the median raw `requestAnimationFrame` delta rather than the on-screen fps, which is a smoothed average and hides stalls. The script's header documents why it closes tabs between runs and reloads the page for each configuration - both matter more than they sound like they should.

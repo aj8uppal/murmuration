@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node tools/test-analysis.mjs",
-    "serve": "./serve.sh"
+    "serve": "./serve.sh",
+    "analyse": "node tools/analyse-track.mjs",
+    "bench": "./tools/bench.sh"
   }
 }
