@@ -53,6 +53,16 @@ struct Uniforms {
   breath         : f32,
   entry          : f32,
   _pad0          : f32,
+  voicePresence  : f32,
+  attack         : f32,
+  percussiveness : f32,
+  _pad1          : f32,
+  bandAttack0    : vec4f,
+  bandAttack1    : vec2f,
+  _pad2          : vec2f,
+  bandSustain0   : vec4f,
+  bandSustain1   : vec2f,
+  _pad3          : vec2f,
 };
 
 struct Particle {
@@ -67,6 +77,36 @@ struct Particle {
 
 const TAU : f32 = 6.28318530718;
 const BINS : f32 = 128.0;
+
+// The renderer's spectrum is logarithmic from 28 Hz to 16 kHz. These are the
+// analysis band's 120/320/800/2000/5000 Hz edges in that same 0..1 space.
+fn audioBandIndex(spectrumBand : f32) -> u32 {
+  if (spectrumBand < 0.2292463) { return 0u; }
+  if (spectrumBand < 0.3837528) { return 1u; }
+  if (spectrumBand < 0.5280929) { return 2u; }
+  if (spectrumBand < 0.6724329) { return 3u; }
+  if (spectrumBand < 0.8167730) { return 4u; }
+  return 5u;
+}
+
+// x size, y streak length, z lifetime decay, w response to the flow field.
+// The low-mid band is deliberately the longest-lived silk population: piano
+// motion remains visible between attacks instead of blinking with level.
+fn bandForm(index : u32) -> vec4f {
+  switch index {
+    case 0u: { return vec4f(1.32, 0.55, 0.66, 0.46); }
+    case 1u: { return vec4f(1.15, 0.78, 0.58, 0.63); }
+    case 2u: { return vec4f(0.95, 1.34, 0.40, 0.84); }
+    case 3u: { return vec4f(0.82, 1.18, 0.76, 1.08); }
+    case 4u: { return vec4f(0.65, 0.74, 1.28, 1.29); }
+    default: { return vec4f(0.50, 0.42, 1.68, 1.48); }
+  }
+}
+
+fn bandSignal(index : u32, lower : vec4f, upper : vec2f) -> f32 {
+  if (index < 4u) { return lower[index]; }
+  return upper[index - 4u];
+}
 
 // -- hashing ---------------------------------------------------------------
 

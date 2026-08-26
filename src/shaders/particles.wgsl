@@ -38,6 +38,18 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
   let p = P[ii];
   let bi  = u32(clamp(p.band, 0.0, 0.9999) * BINS);
   let amp = spectrum[bi];
+  let instrumentBand = u32(clamp(p.home.x, 0.0, 5.0));
+  let form = bandForm(instrumentBand);
+  let bandAttack = bandSignal(instrumentBand, U.bandAttack0, U.bandAttack1);
+  let bandSustain = bandSignal(instrumentBand, U.bandSustain0, U.bandSustain1);
+  let strike = clamp(bandAttack * (0.66 + U.attack * 0.34)
+                     * mix(0.70, 1.24, U.percussiveness), 0.0, 1.0);
+  let held = clamp(bandSustain * mix(1.10, 0.82, U.percussiveness), 0.0, 1.0);
+  let strikeClass = smoothstep(0.68, 0.96, hash11(p.seed * 47.31 + 5.7));
+  let struck = strike * strikeClass;
+  let voiceMark = (1.0 - step(0.115, p.seed))
+                  * clamp(U.voicePresence * 3.2, 0.0, 1.0)
+                  * (1.0 - U.lull * 0.92);
 
   // During a lull the entire field takes a slow spatial breath. Scaling from
   // the particle position preserves centre density instead of excavating it.
@@ -58,7 +70,7 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
 
   // Far grains are tight and bright, near grains bloom into bokeh.
   var fullRadius = mix(0.0016, 0.0062, p.depth) * U.sizeScale * U.spriteScale
-                   * (1.0 + U.level * 0.25) * mix(1.0, 0.44, sparkle);
+                   * form.x * (1.0 + U.level * 0.25) * mix(1.0, 0.44, sparkle);
   // Keep the farthest grains just above subpixel territory at Retina scale.
   let pixelFloor = U.invResolution.y * 1.15 / max(U.camZoom, 0.5);
   fullRadius = max(fullRadius, pixelFloor);
@@ -67,9 +79,9 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
   // area. Free dust approaches a short cinematic streak asymptotically;
   // sparkles retain the longer geometry that makes each glint read cleanly.
   let fullHalfLen = min(sp * 0.021, 0.042) * U.sizeScale * U.spriteScale
-                    * mix(1.0, 0.30, sparkle);
+                    * form.y * mix(1.0, 0.30, sparkle);
   let softSpeed = sp / (1.0 + sp * 2.4);
-  let dustHalfLen = softSpeed * 0.022 * U.sizeScale * U.spriteScale;
+  let dustHalfLen = softSpeed * 0.022 * U.sizeScale * U.spriteScale * form.y;
   let performanceHalfLen = mix(dustHalfLen, fullHalfLen, hero);
 
   // Particle count only tightens the free population. Its N-dependent width
@@ -96,20 +108,35 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
                    * mix(modeWidth * quietWidth, 1.0, hero), pixelFloor);
   let halfLen = performanceHalfLen * mix(quietLength, 1.0, hero);
 
-  let off = axis * (q.x * (halfLen + radius)) + perp * (q.y * radius);
+  // Struck bands become tight sparks while held bands remain long silk. The
+  // vocal population narrows as it lengthens, keeping its central ribbons
+  // distinct without increasing their raster footprint or brightness.
+  let articulatedRadius = max(radius * mix(1.0, 0.52, struck)
+                              * mix(1.0, 0.74, voiceMark), pixelFloor);
+  let articulatedHalfLen = halfLen * (1.0 + held * 0.34)
+                           * mix(1.0, 0.48, struck)
+                           * mix(1.0, 1.42, voiceMark);
+  let baseArticulationArea = radius * (halfLen + radius);
+  let articulationArea = articulatedRadius * (articulatedHalfLen + articulatedRadius);
+  let articulationInk = clamp(baseArticulationArea / max(articulationArea, 1e-8),
+                              0.72, 2.4);
+  let radiusFinal = articulatedRadius;
+  let halfLenFinal = articulatedHalfLen;
+
+  let off = axis * (q.x * (halfLenFinal + radiusFinal)) + perp * (q.y * radiusFinal);
 
   var o : VSOut;
   let centre = worldToClip(wp);
   var clipPos = centre + dirToClip(off);
-  let clipPad = vec2f((halfLen + radius) * U.camZoom / U.aspect,
-                      (halfLen + radius) * U.camZoom);
+  let clipPad = vec2f((halfLenFinal + radiusFinal) * U.camZoom / U.aspect,
+                      (halfLenFinal + radiusFinal) * U.camZoom);
   // All six vertices collapse to one point when the complete capsule is out.
   if (abs(centre.x) > 1.0 + clipPad.x || abs(centre.y) > 1.0 + clipPad.y) {
     clipPos = vec2f(2.0);
   }
   o.pos     = vec4f(clipPos, 0.0, 1.0);
-  o.local   = vec2f(q.x * (halfLen + radius) / radius, q.y);
-  o.halfLen = halfLen / radius;
+  o.local   = vec2f(q.x * (halfLenFinal + radiusFinal) / radiusFinal, q.y);
+  o.halfLen = halfLenFinal / radiusFinal;
 
   // Spatial interference and velocity direction give colour coherent veins,
   // while a restrained thin-film shift glances across the fastest filaments.
@@ -129,6 +156,9 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
   let filmMix = 0.10 + e * 0.18 + minor * 0.05 - major * 0.025;
   var col = mix(palette(t, U.mood), palette(fract(t + 0.10 + film * 0.16), U.mood),
                 filmMix);
+  // The entering voice shares a calm, coherent colour across frequencies; its
+  // identity comes from the gathered ribbon, not from extra luminance.
+  col = mix(col, palette(fract(0.70 + p.depth * 0.16), U.mood), voiceMark * 0.34);
   let transient = U.beat * exp(-U.beatAge * 5.0);
   col = col * (0.20 + amp * 1.45 + U.level * 0.28 + transient * 0.58
                + U.onset * 0.26 + U.entry * 0.46 + U.phasePulse * 0.055)
@@ -146,12 +176,13 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
   let eventEnergy = 1.0 + U.onset * 0.22 + U.entry * 0.38
                     + U.phasePulse * 0.05;
   let modeEnergy = 1.0 + major * 0.035 - minor * 0.040;
+  let bandEnergy = mix(0.72, 1.06, f32(instrumentBand) * 0.2);
 
   o.color = col;
   o.alpha = 0.0092 * U.density * bright * fade
             * (0.40 + amp * 0.95) * (1.0 + sparkle * 1.35)
-            * inkCompensation * visibility * quietEnergy
-            * eventEnergy * modeEnergy;
+            * inkCompensation * articulationInk * visibility * quietEnergy
+            * eventEnergy * modeEnergy * bandEnergy;
   return o;
 }
 

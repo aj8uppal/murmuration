@@ -31,7 +31,7 @@ command -v chrome-devtools-axi >/dev/null || { echo "chrome-devtools-axi not fou
 curl -sf -o /dev/null "$URL" || { echo "nothing serving on $PORT - run ./serve.sh" >&2; exit 1; }
 
 close_tabs () {
-  for id in $(chrome-devtools-axi pages 2>&1 | awk -F, '/,je,/{print $1}' | tr -d ' '); do
+  for id in $(chrome-devtools-axi pages 2>&1 | awk -F, '/Murmuration/{print $1}' | tr -d ' '); do
     chrome-devtools-axi closepage "$id" >/dev/null 2>&1 || true
   done
 }

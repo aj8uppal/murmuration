@@ -11,7 +11,13 @@ The flagship track is Patrick Watson's *Je te laisserai des mots*, but it reads 
 
 ![the same track sixteen seconds later, in the near-silent bar](docs/lull.jpg)
 
-The same track sixteen seconds apart: a full passage, then the near-silent bar at 0:58. Nothing is scripted - the field thins, dims and slows because the music did.
+The same track fifteen seconds apart: a full passage, then the near-silent bar at 1:06. Nothing is scripted - the field thins, dims and slows because the music did.
+
+![the solo piano opening](docs/piano.jpg)
+
+![a sung phrase](docs/voice.jpg)
+
+And the solo piano opening against a sung phrase. The piano reads struck and warm; the voice, isolated by its centre placement rather than its pitch, arrives as a separate coherent form.
 
 ## Run it
 
@@ -139,11 +145,11 @@ GPU time per frame on an M-series Mac at 1800x3043 (5.5MP, a Retina window), tra
 
 | preset | particles | GPU / frame | headroom |
 | --- | --- | --- | --- |
-| calm | 260k | 6.43 ms | 156 fps |
-| full | 620k | 10.46 ms | 96 fps |
-| lavish | 1.2M | 13.52 ms | 74 fps |
+| calm | 260k | 4.23 ms | 236 fps |
+| full | 620k | 8.07 ms | 124 fps |
+| lavish | 1.2M | 11.85 ms | 84 fps |
 
-4.6x the particles for 2.1x the GPU time, which is the point of the footprint normalisation above.
+4.6x the particles for 2.8x the GPU time, which is the point of the footprint normalisation above.
 
 These are GPU-time numbers, not wall clock, and the distinction matters: measured on a machine at load 7 the same configurations read 13/19/29 ms of wall clock, because the frame loop was contending with everything else running. Wall-clock frame deltas are worth watching for what a user experiences, but they are the wrong instrument for judging a rendering change.
 

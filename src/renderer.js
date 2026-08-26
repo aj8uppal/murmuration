@@ -18,7 +18,7 @@ const SHADERS = [
 
 const SPECTRUM_BINS = 128;
 const PARTICLE_STRIDE = 40; // bytes: pos, vel, home, seed, life, depth, band
-const UNIFORM_FLOATS = 76;
+const UNIFORM_FLOATS = 96;
 
 const U = {
   resX: 0, resY: 1, invX: 2, invY: 3,
@@ -35,7 +35,13 @@ const U = {
   trail0: 44, trail1: 48, trail2: 52, trail3: 56, trail4: 60, trail5: 64,
   interactionGlow: 68, phasePulse: 69, onset: 70, musicDensity: 71,
   lull: 72, breath: 73, entry: 74,
+  voicePresence: 76, attack: 77, percussiveness: 78,
+  bandAttack: 80, bandSustain: 88,
 };
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+}
 
 export class Renderer {
   constructor(canvas) {
@@ -684,11 +690,26 @@ export class Renderer {
     u[U.interactionGlow] = state.interactionGlow
       ?? Math.max(it.glow, pointerDown * 0.8, trailGlow * 0.32);
     u[U.phasePulse] = phasePulse;
-    u[U.onset] = Math.max(0, Math.min(1, state.onset ?? 0));
-    u[U.musicDensity] = Math.max(0, Math.min(1, state.density ?? 0));
-    u[U.lull] = Math.max(0, Math.min(1, state.lull ?? 0));
-    u[U.breath] = Math.max(0, Math.min(1, state.breath ?? 0));
-    u[U.entry] = Math.max(0, Math.min(1, state.entry ?? 0));
+    u[U.onset] = clamp01(state.onset);
+    u[U.musicDensity] = clamp01(state.density);
+    u[U.lull] = clamp01(state.lull);
+    u[U.breath] = clamp01(state.breath);
+    u[U.entry] = clamp01(state.entry);
+
+    // The analyser already gives voice a phrase-length envelope. Squaring the
+    // hint separates a real entrance from occasional centred strings without
+    // turning it into a binary detector; confidence makes mono/mic input an
+    // exact no-op.
+    const voice = clamp01(state.voice);
+    u[U.voicePresence] = voice * voice * clamp01(state.voiceConfidence);
+    u[U.attack] = clamp01(state.attack);
+    u[U.percussiveness] = clamp01(state.percussiveness);
+    const bandAttack = state.bandAttack;
+    const bandSustain = state.bandSustain;
+    for (let i = 0; i < 6; i++) {
+      u[U.bandAttack + i] = clamp01(bandAttack?.[i]);
+      u[U.bandSustain + i] = clamp01(bandSustain?.[i]);
+    }
 
     d.queue.writeBuffer(this.uniformBuffer, 0, u);
     d.queue.writeBuffer(this.spectrumBuffer, 0, state.spectrum);

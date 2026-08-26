@@ -32,11 +32,13 @@ fn spawn(i : u32, salt : f32) -> Particle {
   var p : Particle;
   p.pos   = vec2f(cos(ang) * rad * U.aspect, sin(ang) * rad);
   p.vel   = vec2f(cos(ang + 1.5707963), sin(ang + 1.5707963)) * (0.05 + a.z * 0.1);
-  p.home  = p.pos;
   p.seed  = b.x;
   p.life  = 1.05 + b.y * 0.55;
   p.depth = b.z;
   p.band  = pow(hash11(f32(i) * 2.399 + salt), 1.25);
+  // home was formerly an unused copy of pos. Cache the perceptual band here so
+  // the hot simulation and draw paths do not repeat five threshold tests.
+  p.home  = vec2f(f32(audioBandIndex(p.band)), 0.0);
   return p;
 }
 
@@ -60,6 +62,13 @@ fn simMain(@builtin(global_invocation_id) gid : vec3u) {
 
   let bi  = u32(clamp(p.band, 0.0, 0.9999) * BINS);
   let amp = spectrum[bi];
+  let instrumentBand = u32(clamp(p.home.x, 0.0, 5.0));
+  let form = bandForm(instrumentBand);
+  let bandAttack = bandSignal(instrumentBand, U.bandAttack0, U.bandAttack1);
+  let bandSustain = bandSignal(instrumentBand, U.bandSustain0, U.bandSustain1);
+  let strike = clamp(bandAttack * (0.66 + U.attack * 0.34)
+                     * mix(0.70, 1.24, U.percussiveness), 0.0, 1.0);
+  let held = clamp(bandSustain * mix(1.10, 0.82, U.percussiveness), 0.0, 1.0);
 
   // Radial terms live in screen-normalised space so the cloud stays framed.
   let nrm  = vec2f(p.pos.x / U.aspect, p.pos.y);
@@ -126,6 +135,7 @@ fn simMain(@builtin(global_invocation_id) gid : vec3u) {
   }
 
   var acc = mix(modeA, modeB, select(mf, 0.0, mi == mj))
+            * form.w * (1.0 + held * 0.22)
             * (0.52 + amp * 1.12 + U.level * 0.38) * U.speedScale;
 
   // Audio transients carve visible expanding rings through every mode.
@@ -159,6 +169,30 @@ fn simMain(@builtin(global_invocation_id) gid : vec3u) {
   acc += (flow * 0.88 + tang * (0.07 + amp * 0.10)) * U.entry
          * (0.62 + U.musicDensity * 0.26);
 
+  // Only a stable fraction of each struck band sparks. The kick follows the
+  // shared flow axis, so piano attacks articulate the silk instead of spraying
+  // independent grains in every direction.
+  let strikeClass = smoothstep(0.68, 0.96, hash11(p.seed * 47.31 + 5.7));
+  let struck = strike * strikeClass;
+  acc += (flow * 0.82 + tang * flow.x * 0.14) * struck
+         * (0.42 + form.w * 0.24);
+
+  // A voice gathers a small, frequency-independent population into two fine
+  // central ribbons. It is a physical arrival, not a light pulse. Squared and
+  // confidence-gated on the CPU, this is exactly zero for mono or microphone
+  // input and remains weak for the track's occasional centred strings.
+  let voiceGain = clamp(U.voicePresence * 3.2, 0.0, 1.0) * (1.0 - quiet * 0.92);
+  if (voiceGain > 0.001 && p.seed < 0.115) {
+    let voiceU = p.seed / 0.115;
+    let vy = (voiceU * 2.0 - 1.0) * 0.76;
+    let side = select(-1.0, 1.0, hash11(p.seed * 173.7 + 2.1) > 0.5);
+    let curve = (vy - vy * vy * vy) * 0.22 * U.aspect;
+    let sway = sin(U.time * 0.22 + p.depth * TAU) * 0.026 * U.aspect;
+    let target = vec2f(curve + side * (0.018 + p.depth * 0.026) + sway, vy);
+    acc = mix(acc, flow * (0.24 + held * 0.10), voiceGain * 0.34);
+    acc += (target - p.pos) * voiceGain * 3.8;
+  }
+
   // Resting pointer is subtle; a held pointer becomes a tactile attract/repel
   // tool and inherits drag velocity like a brush moving through smoke.
   let dm  = U.pointer - p.pos;
@@ -182,7 +216,11 @@ fn simMain(@builtin(global_invocation_id) gid : vec3u) {
        + trailForce(p.pos, U.trail2) + trailForce(p.pos, U.trail3)
        + trailForce(p.pos, U.trail4) + trailForce(p.pos, U.trail5);
 
-  let damping = mix(0.955, 0.890, quiet);
+  // Low bands retain momentum; high bands answer and settle quickly. Sustained
+  // material carries a little more of its previous tangent between frames.
+  let bandProgress = f32(instrumentBand) * 0.2;
+  let baseDamping = min(0.984, mix(0.978, 0.936, bandProgress) + held * 0.005);
+  let damping = mix(baseDamping, 0.890, quiet);
 
   p.vel = (p.vel + acc * dt) * pow(damping, dt * 60.0);
 
@@ -190,7 +228,9 @@ fn simMain(@builtin(global_invocation_id) gid : vec3u) {
   if (sp > 1.45) { p.vel = p.vel * (1.45 / sp); }
 
   p.pos += p.vel * dt;
-  p.life -= dt * (0.085 + 0.06 * U.level) * mix(1.0, 0.38, U.lull);
+  p.life -= dt * (0.085 + 0.06 * U.level) * form.z
+            * mix(1.0, 0.66, held) * (1.0 + struck * 0.16)
+            * mix(1.0, 0.38, U.lull);
 
   let bound = 1.35 * max(1.0, U.aspect);
   if (p.life <= 0.0 || length(p.pos) > bound) {
