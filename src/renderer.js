@@ -184,7 +184,10 @@ export class Renderer {
 
   async #loadShaders() {
     const sources = await Promise.all(SHADERS.map(async (name) => {
-      const res = await fetch(`./src/shaders/${name}.wgsl`);
+      // Revalidate every time. These are fetched, not imported, so a query
+      // string on the page does not bust them - a stale shader will happily
+      // pair with fresh JS and render a black screen.
+      const res = await fetch(`./src/shaders/${name}.wgsl`, { cache: 'no-cache' });
       if (!res.ok) throw new Error(`Failed to load shader ${name}.wgsl (${res.status})`);
       return [name, await res.text()];
     }));
@@ -192,18 +195,38 @@ export class Renderer {
     const common = src.common;
 
     this.modules = {};
+    const created = [];
     for (const name of SHADERS) {
       if (name === 'common') continue;
       const code = `${common}\n\n${src[name]}`;
-      const mod = this.device.createShaderModule({ code, label: name });
-      mod.getCompilationInfo().then((info) => {
-        for (const m of info.messages) {
-          const line = `${name}.wgsl:${m.lineNum}:${m.linePos} ${m.message}`;
-          if (m.type === 'error') console.error(line); else console.warn(line);
-        }
-      });
-      this.modules[name] = mod;
+      this.modules[name] = this.device.createShaderModule({ code, label: name });
+      created.push(name);
     }
+
+    // A shader that fails to compile leaves its pipeline invalid, and the piece
+    // then renders a perfectly black frame at a perfectly healthy frame rate -
+    // which looks like anything but a compile error. So this is fatal rather
+    // than logged. Every module is created before any of them is inspected,
+    // and each check is bounded: awaiting compilation info one module at a time
+    // can stall indefinitely, which trades a black screen for a stuck boot.
+    const commonLines = common.split('\n').length + 1;
+    const failures = [];
+    await Promise.all(created.map(async (name) => {
+      const info = await Promise.race([
+        this.modules[name].getCompilationInfo(),
+        new Promise((resolve) => setTimeout(() => resolve(null), 4000)),
+      ]);
+      if (!info) return;
+      for (const m of info.messages) {
+        // Report against the file the author edits, not the concatenation with
+        // common.wgsl that the device actually compiled.
+        const line = m.lineNum > commonLines ? m.lineNum - commonLines : m.lineNum;
+        const where = `${name}.wgsl:${line}:${m.linePos}`;
+        if (m.type === 'error') failures.push(`${where} ${m.message}`);
+        else console.warn(`${where} ${m.message}`);
+      }
+    }));
+    if (failures.length) throw new Error(`shader compilation failed\n${failures.join('\n')}`);
   }
 
   #createStaticResources() {

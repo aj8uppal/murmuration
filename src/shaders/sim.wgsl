@@ -188,9 +188,9 @@ fn simMain(@builtin(global_invocation_id) gid : vec3u) {
     let side = select(-1.0, 1.0, hash11(p.seed * 173.7 + 2.1) > 0.5);
     let curve = (vy - vy * vy * vy) * 0.22 * U.aspect;
     let sway = sin(U.time * 0.22 + p.depth * TAU) * 0.026 * U.aspect;
-    let target = vec2f(curve + side * (0.018 + p.depth * 0.026) + sway, vy);
+    let ribbon = vec2f(curve + side * (0.018 + p.depth * 0.026) + sway, vy);
     acc = mix(acc, flow * (0.24 + held * 0.10), voiceGain * 0.34);
-    acc += (target - p.pos) * voiceGain * 3.8;
+    acc += (ribbon - p.pos) * voiceGain * 3.8;
   }
 
   // Resting pointer is subtle; a held pointer becomes a tactile attract/repel
