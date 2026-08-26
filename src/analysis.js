@@ -28,6 +28,16 @@ const FLUX_LEN = 512;            // ~8.5s of history, enough for autocorrelation
 const MIN_LAG = 20;              // 180 BPM
 const MAX_LAG = 75;              // 48 BPM
 
+// Where a lead vocal lives. Below this a bass guitar is also centred; above it
+// there is mostly air and cymbals, which are usually wide.
+const VOICE_LO_HZ = 260;
+const VOICE_HI_HZ = 3400;
+// How much side energy to subtract before calling what is left centred.
+const VOICE_SIDE_REJECT = 2.0;
+// Must match the analyser settings the bytes came from.
+const ANALYSER_MIN_DB = -95;
+const ANALYSER_MAX_DB = -12;
+
 const BAND_EDGES_HZ = [0, 120, 320, 800, 2000, 5000, 22050];
 const BAND_NAMES = ['sub', 'bass', 'low-mid', 'mid', 'presence', 'air'];
 
@@ -58,6 +68,13 @@ export class MusicAnalysis {
     this.density = 0;            // how busy the music is, 0..1
     this.lull = 0;               // slow inverse of density - drives the breath
     this.breath = 0;             // 0..1 oscillation, only alive during a lull
+
+    this.voice = 0;              // centre-dominant energy in the vocal band
+    this.voiceConfidence = 0;    // zero for mono sources, where the test is meaningless
+    this.attack = 0;             // instantaneous transient energy
+    this.percussiveness = 0;     // struck vs bowed/held, 0..1
+    this.bandAttack = new Float32Array(BAND_NAMES.length);
+    this.bandSustain = new Float32Array(BAND_NAMES.length);
 
     this.bands = new Float32Array(BAND_NAMES.length);
     this.entry = 0;              // impulse when an instrument arrives
@@ -120,18 +137,90 @@ export class MusicAnalysis {
     this.binMapsBuilt = true;
   }
 
+  #buildVoiceRange(bins) {
+    const nyquist = this.sampleRate / 2;
+    this.voiceLo = Math.max(1, Math.floor((VOICE_LO_HZ / nyquist) * bins));
+    this.voiceHi = Math.min(bins - 1, Math.ceil((VOICE_HI_HZ / nyquist) * bins));
+
+    // The bytes are a dB scale. Comparing centre against sides has to happen in
+    // energy, not in dB: a dB gap says how much louder the centre is, which is
+    // the same number whether the passage is a whisper or a wall of strings.
+    // Summed energy says how much centred material there actually is.
+    this.byteToLin = new Float32Array(256);
+    for (let b = 0; b < 256; b++) {
+      const db = ANALYSER_MIN_DB + (b / 255) * (ANALYSER_MAX_DB - ANALYSER_MIN_DB);
+      this.byteToLin[b] = b < 8 ? 0 : Math.pow(10, db / 20);
+    }
+    this.voiceRangeBuilt = true;
+  }
+
+  /**
+   * Centre-dominant energy in the vocal band.
+   *
+   * These are dB-mapped bytes, so mid minus side is a level ratio rather than
+   * an amplitude difference - which is what we want: it asks how many dB the
+   * centre beats the sides by, independent of how loud the passage is.
+   *
+   * A mono source has no side channel at all, which would make everything look
+   * perfectly centred. Confidence tracks how much side energy the track carries
+   * overall, so mono files and microphone input report the truth instead.
+   */
+  #updateVoice(midBytes, sideBytes, dt) {
+    if (!this.voiceRangeBuilt) this.#buildVoiceRange(midBytes.length);
+
+    const lut = this.byteToLin;
+    let centreEnergy = 0;
+    let totalEnergy = 0;
+    let sideEnergy = 0;
+    for (let i = this.voiceLo; i <= this.voiceHi; i++) {
+      const mL = lut[midBytes[i]];
+      const sL = lut[sideBytes[i]];
+      centreEnergy += Math.max(0, mL - VOICE_SIDE_REJECT * sL);
+      totalEnergy += mL;
+      sideEnergy += sL;
+    }
+    // With almost nothing playing, a handful of bins scraping over the floor
+    // would otherwise read as a confident vocal through the fade.
+    const raw = totalEnergy > 1e-4 ? centreEnergy : 0;
+
+    this.stereoWidth = (this.stereoWidth ?? 0)
+      + ((totalEnergy > 1e-6 ? sideEnergy / totalEnergy : 0) - (this.stereoWidth ?? 0))
+        * (1 - Math.pow(0.5, dt / 4));
+    const confTarget = Math.min(1, this.stereoWidth / 0.12);
+    this.voiceConfidence += (confTarget - this.voiceConfidence) * (1 - Math.pow(0.5, dt / 2));
+
+    // A ceiling alone is not enough. On this track the piano is centre-panned
+    // as well as the voice, so there is a large constant floor of centred
+    // energy and the vocal is the excursion above it - measuring against the
+    // peak only gave 1.4x separation. Tracking the floor as well, and reading
+    // the gap between them, is what makes the voice legible.
+    if (this.voiceFloor === undefined) this.voiceFloor = raw;
+    this.voiceFloor = raw < this.voiceFloor
+      ? raw                                                          // settle at once
+      : this.voiceFloor + (raw - this.voiceFloor) * (1 - Math.pow(0.5, dt / 75));
+    this.voicePeak = Math.max(raw, (this.voicePeak ?? 0) * Math.pow(0.5, dt / 45));
+
+    const span = this.voicePeak - this.voiceFloor;
+    const rel = span > 1e-6 ? (raw - this.voiceFloor) / span : 0;
+    const target = smoothstep(0.25, 0.68, rel) * this.voiceConfidence;
+    const tau = target > this.voice ? 0.20 : 1.1;   // arrives quickly, holds across a phrase
+    this.voice += (target - this.voice) * (1 - Math.pow(0.5, dt / tau));
+  }
+
   /**
    * @param {number} dt seconds since the last call
    * @param {Uint8Array} chromaBytes long-window FFT, for key and mode
    * @param {Uint8Array} onsetBytes  short-window FFT, for transients and tempo
    */
-  update(dt, chromaBytes, onsetBytes) {
+  update(dt, chromaBytes, onsetBytes, midBytes, sideBytes) {
     if (!this.binMapsBuilt) this.#buildBinMaps(chromaBytes.length, onsetBytes.length);
     const step = Math.min(dt, 0.1);
 
+    if (midBytes && sideBytes) this.#updateVoice(midBytes, sideBytes, step);
     this.#updateChroma(chromaBytes, step);
     this.#updateFlux(onsetBytes, step);
     this.#updateBands(onsetBytes, step);
+    this.#updateArticulation(step);
     this.#updateTempo(step);
     this.#updateDensity(step);
     this.onset *= Math.pow(0.004, step);
@@ -251,6 +340,16 @@ export class MusicAnalysis {
       this.bandSlow[b] += (v - this.bandSlow[b]) * aSlow;
       this.bandCooldown[b] = Math.max(0, this.bandCooldown[b] - dt);
 
+      // Struck versus held, per band. A piano and a string section can occupy
+      // the same octaves and still look nothing alike: the piano surges above
+      // its own running level on every strike and decays away, the strings sit
+      // on theirs. Relative to the band's own level, so a quiet band is not
+      // permanently judged sustained just for being quiet.
+      const surge = Math.max(0, this.bandFast[b] - this.bandSlow[b])
+                  / Math.max(this.bandSlow[b], 0.06);
+      this.bandAttack[b] = Math.min(1, surge * 1.4);
+      this.bandSustain[b] = Math.min(1, this.bandSlow[b] * 2.2);
+
       // An entry is a band that was quiet for a while and is suddenly not.
       // An arrival should be rare and mean something - it carries the largest
       // brightness weight of any event, so a loose bar here reads as flicker.
@@ -264,6 +363,24 @@ export class MusicAnalysis {
         this.entryName = BAND_NAMES[b];
       }
     }
+  }
+
+  #updateArticulation(dt) {
+    let att = 0;
+    let sus = 0;
+    let wsum = 0;
+    for (let b = 0; b < BAND_NAMES.length; b++) {
+      const w = FULLNESS_WEIGHTS[b];
+      att += this.bandAttack[b] * w;
+      sus += this.bandSustain[b] * w;
+      wsum += w;
+    }
+    att /= wsum;
+    sus /= wsum;
+
+    this.attack += (att - this.attack) * (1 - Math.pow(0.5, dt / 0.10));
+    const balance = att / (att + sus + 1e-4);
+    this.percussiveness += (balance - this.percussiveness) * (1 - Math.pow(0.5, dt / 1.2));
   }
 
   #updateTempo(dt) {
@@ -391,6 +508,12 @@ export class MusicAnalysis {
       breath: this.breath,
       entry: this.entry,
       entryName: this.entryName,
+      voice: this.voice,
+      voiceConfidence: this.voiceConfidence,
+      attack: this.attack,
+      percussiveness: this.percussiveness,
+      bandAttack: this.bandAttack,
+      bandSustain: this.bandSustain,
     };
   }
 }

@@ -194,5 +194,82 @@ console.log('\ninstrument entry');
   check('a new band fires an entry', fired > 0, `frames above threshold=${fired}, band=${m.entryName}`);
 }
 
+const STEREO_BINS = 1024;   // fftSize 2048
+
+/** mid/side byte spectra for content placed centre or wide in the vocal band. */
+function stereoPair({ centreLevel = 0, wideLevel = 0 }) {
+  const mid = new Uint8Array(STEREO_BINS);
+  const side = new Uint8Array(STEREO_BINS);
+  const perBin = NYQUIST / STEREO_BINS;
+  for (let i = 1; i < STEREO_BINS; i++) {
+    const f = i * perBin;
+    if (f < 260 || f > 3400) continue;
+    // Centred content shows in mid only; wide content shows in both.
+    mid[i] = Math.min(255, centreLevel + wideLevel);
+    side[i] = Math.min(255, wideLevel);
+  }
+  return [mid, side];
+}
+
+console.log('\nvoice, from centre against sides');
+{
+  const spec = spectrumFor(C_MINOR);
+  const onsets = () => { const b = new Uint8Array(ONSET_BINS); for (let k=1;k<ONSET_BINS;k++) b[k]=150; return b; };
+  const dt = 1 / 60;
+
+  const drive = (pair, seconds, m = new MusicAnalysis(SAMPLE_RATE)) => {
+    for (let i = 0; i < 60 * seconds; i++) m.update(dt, spec, onsets(), pair[0], pair[1]);
+    return m;
+  };
+
+  // A wide arrangement, then a centred vocal arriving over it.
+  const m = new MusicAnalysis(SAMPLE_RATE);
+  drive(stereoPair({ wideLevel: 150 }), 18, m);
+  const instrumentalOnly = m.voice;
+  drive(stereoPair({ wideLevel: 150, centreLevel: 80 }), 10, m);
+  const withVocal = m.voice;
+
+  check('wide arrangement alone reads no voice', instrumentalOnly < 0.25,
+    `voice=${instrumentalOnly.toFixed(2)}`);
+  check('a centred vocal over it registers', withVocal > 0.55, `voice=${withVocal.toFixed(2)}`);
+  check('the two are clearly separated', withVocal - instrumentalOnly > 0.4,
+    `gap=${(withVocal - instrumentalOnly).toFixed(2)}`);
+
+  // Mono: side is identically zero, so everything looks centred. The detector
+  // must report that it cannot tell, rather than claiming constant vocal.
+  const monoMid = new Uint8Array(STEREO_BINS).fill(160);
+  const monoSide = new Uint8Array(STEREO_BINS);
+  const mono = drive([monoMid, monoSide], 20);
+  check('mono source reports no confidence', mono.voiceConfidence < 0.2,
+    `confidence=${mono.voiceConfidence.toFixed(2)}`);
+  check('mono source does not claim a voice', mono.voice < 0.2, `voice=${mono.voice.toFixed(2)}`);
+}
+
+console.log('\nstruck against held');
+{
+  const spec = spectrumFor(C_MAJOR);
+  const dt = 1 / 60;
+
+  const struck = new MusicAnalysis(SAMPLE_RATE);
+  for (let i = 0; i < 60 * 20; i++) {
+    const env = Math.exp(-((i % 30) / 30) * 11);
+    const b = new Uint8Array(ONSET_BINS);
+    for (let k = 1; k < ONSET_BINS; k++) b[k] = Math.min(255, 215 * env);
+    struck.update(dt, spec, b);
+  }
+
+  const held = new MusicAnalysis(SAMPLE_RATE);
+  for (let i = 0; i < 60 * 20; i++) {
+    const b = new Uint8Array(ONSET_BINS);
+    for (let k = 1; k < ONSET_BINS; k++) b[k] = 175;
+    held.update(dt, spec, b);
+  }
+
+  check('struck playing reads percussive', struck.percussiveness > held.percussiveness + 0.15,
+    `struck=${struck.percussiveness.toFixed(2)} held=${held.percussiveness.toFixed(2)}`);
+  check('held playing reads sustained', held.percussiveness < 0.25,
+    `percussiveness=${held.percussiveness.toFixed(2)}`);
+}
+
 console.log(`\n${failures === 0 ? 'all checks passed' : `${failures} FAILED`}\n`);
 process.exit(failures === 0 ? 0 : 1);

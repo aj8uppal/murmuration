@@ -322,6 +322,12 @@ class App {
       lull: m.lull,
       breath: m.breath,
       entry: m.entry,
+      voice: m.voice,
+      voiceConfidence: m.voiceConfidence,
+      attack: m.attack,
+      percussiveness: m.percussiveness,
+      bandAttack: m.bandAttack,
+      bandSustain: m.bandSustain,
     });
 
     this.#drawRibbon();
@@ -456,9 +462,12 @@ function writeStored(key, value) {
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 /** Stand-in before an AudioContext exists, so the frame loop stays branch-free. */
+const EMPTY_BANDS = new Float32Array(6);
 const EMPTY_MUSIC = {
   tempo: 0, tempoConfidence: 0, beatPhase: 0, mode: 0, modeConfidence: 0,
   onset: 0, density: 0, lull: 0, breath: 0, entry: 0,
+  voice: 0, voiceConfidence: 0, attack: 0, percussiveness: 0,
+  bandAttack: EMPTY_BANDS, bandSustain: EMPTY_BANDS,
 };
 
 function fmt(seconds) {

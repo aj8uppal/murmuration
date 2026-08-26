@@ -69,6 +69,22 @@ export class AudioEngine {
       this.onsetAnalyser.maxDecibels = -12;
       this.onsetData = new Uint8Array(this.onsetAnalyser.frequencyBinCount);
 
+      // Mid and side. A vocal is mixed dead centre and a piano or a string
+      // section is spread wide, so (L+R) against (L-R) separates the voice from
+      // the arrangement far better than any frequency split can - they share
+      // the same octaves. Mid is just the tap down-mixed to mono; side needs
+      // the right channel inverted and summed back onto the left.
+      this.midAnalyser = this.ctx.createAnalyser();
+      this.sideAnalyser = this.ctx.createAnalyser();
+      for (const a of [this.midAnalyser, this.sideAnalyser]) {
+        a.fftSize = 2048;
+        a.smoothingTimeConstant = 0.5;
+        a.minDecibels = -95;
+        a.maxDecibels = -12;
+      }
+      this.midData = new Uint8Array(this.midAnalyser.frequencyBinCount);
+      this.sideData = new Uint8Array(this.sideAnalyser.frequencyBinCount);
+
       // Analysis bus. Nothing downstream of it reaches the speakers, so
       // microphone input can be measured without being played back.
       this.tap = this.ctx.createGain();
@@ -77,6 +93,17 @@ export class AudioEngine {
       this.tap.connect(this.analyser);
       this.tap.connect(this.chromaAnalyser);
       this.tap.connect(this.onsetAnalyser);
+      this.tap.connect(this.midAnalyser);
+
+      const splitter = this.ctx.createChannelSplitter(2);
+      const invertRight = this.ctx.createGain();
+      invertRight.gain.value = -1;
+      this.sideSum = this.ctx.createGain();
+      this.tap.connect(splitter);
+      splitter.connect(this.sideSum, 0);
+      splitter.connect(invertRight, 1);
+      invertRight.connect(this.sideSum);
+      this.sideSum.connect(this.sideAnalyser);
 
       this.music = new MusicAnalysis(this.ctx.sampleRate);
       this.#buildBinMap();
@@ -240,7 +267,9 @@ export class AudioEngine {
 
     this.chromaAnalyser.getByteFrequencyData(this.chromaData);
     this.onsetAnalyser.getByteFrequencyData(this.onsetData);
-    this.music.update(dt, this.chromaData, this.onsetData);
+    this.midAnalyser.getByteFrequencyData(this.midData);
+    this.sideAnalyser.getByteFrequencyData(this.sideData);
+    this.music.update(dt, this.chromaData, this.onsetData, this.midData, this.sideData);
   }
 
   #decayIdle(dt) {
