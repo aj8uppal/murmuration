@@ -84,7 +84,8 @@ class App {
     $('#btn-song').addEventListener('click', () => this.#playSong());
     $('#btn-ambient').addEventListener('click', () => this.#begin(() => this.audio.startAmbient()));
     $('#btn-file').addEventListener('click', () => $('#file-input').click());
-    $('#btn-mic').addEventListener('click', () => this.#begin(() => this.audio.startMic()));
+    $('#btn-mic').addEventListener('click', () => this.#useMic());
+    $('#input-device').addEventListener('change', (e) => this.#useMic(e.target.value));
 
     $('#file-input').addEventListener('change', (e) => {
       const file = e.target.files?.[0];
@@ -118,6 +119,28 @@ class App {
     this.ribbonCtx = this.spectrumCanvas.getContext('2d');
 
     this.#setQuality(this.quality, { silent: true, persist: false });
+  }
+
+  /**
+   * Device labels are only readable after permission has been granted, so the
+   * picker is populated once the stream is live rather than up front. This is
+   * also how you point the piece at a loopback device to read another app's
+   * output.
+   */
+  async #useMic(deviceId) {
+    await this.#begin(() => this.audio.startMic(deviceId));
+    const inputs = await this.audio.listInputs();
+    if (inputs.length < 2) return;
+    const sel = $('#input-device');
+    sel.innerHTML = '';
+    for (const d of inputs) {
+      const o = document.createElement('option');
+      o.value = d.id;
+      o.textContent = d.label;
+      o.selected = d.id === this.audio.micDeviceId;
+      sel.append(o);
+    }
+    $('#input-picker').hidden = false;
   }
 
   async #playSong() {
@@ -254,7 +277,7 @@ class App {
           this.#toast('zoom reset');
           break;
         case 'KeyM':
-          this.#begin(() => this.audio.startMic());
+          this.#useMic();
           break;
         case 'Digit1': this.#setQuality(0); break;
         case 'Digit2': this.#setQuality(1); break;
@@ -322,6 +345,9 @@ class App {
       lull: m.lull,
       breath: m.breath,
       entry: m.entry,
+      pitch: m.pitch,
+      pitchCents: m.pitchCents,
+      pitchConfidence: m.pitchConfidence,
       voice: m.voice,
       voiceConfidence: m.voiceConfidence,
       attack: m.attack,
@@ -467,6 +493,7 @@ const EMPTY_MUSIC = {
   tempo: 0, tempoConfidence: 0, beatPhase: 0, mode: 0, modeConfidence: 0,
   onset: 0, density: 0, lull: 0, breath: 0, entry: 0,
   voice: 0, voiceConfidence: 0, attack: 0, percussiveness: 0,
+  pitch: 0, pitchCents: 0, pitchConfidence: 0,
   bandAttack: EMPTY_BANDS, bandSustain: EMPTY_BANDS,
 };
 

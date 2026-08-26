@@ -105,6 +105,14 @@ export class AudioEngine {
       invertRight.connect(this.sideSum);
       this.sideSum.connect(this.sideAnalyser);
 
+      // Live input arrives 20-30 dB below a mastered track, and the analyser
+      // windows are set for mastered levels - so a microphone lands in the
+      // bottom of the byte range and everything downstream reads faint. This
+      // node is driven by a slow AGC to bring live input up into range.
+      this.inputGain = this.ctx.createGain();
+      this.inputGain.gain.value = 1;
+      this.inputGain.connect(this.tap);
+
       this.music = new MusicAnalysis(this.ctx.sampleRate);
       this.#buildBinMap();
     }
@@ -169,6 +177,7 @@ export class AudioEngine {
     this.source.loop = true;
     this.source.connect(this.master);
     this.source.start(0, offset % this.buffer.duration);
+    this.music?.setLive(false);
     this.startedAt = this.ctx.currentTime;
     this.offset = offset;
     this.playing = true;
@@ -185,19 +194,61 @@ export class AudioEngine {
     this.playing = true;
   }
 
-  async startMic() {
+  /** Audio inputs available to pick from, including any loopback device. */
+  async listInputs() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter((d) => d.kind === 'audioinput')
+        .map((d) => ({ id: d.deviceId, label: d.label || 'input' }));
+    } catch {
+      return [];
+    }
+  }
+
+  async startMic(deviceId) {
     await this.ensureContext();
     this.#stopSource();
     this.micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      audio: {
+        deviceId: deviceId ? { exact: deviceId } : undefined,
+        // All three would fight the analysis: they duck, gate and colour the
+        // very dynamics being measured.
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
     });
     this.source = this.ctx.createMediaStreamSource(this.micStream);
     // Onto the analysis bus only, never back out to the speakers.
-    this.source.connect(this.tap);
+    this.source.connect(this.inputGain);
+    this.micDeviceId = deviceId ?? null;
+
+    const track = this.micStream.getAudioTracks()[0];
     this.mode = 'mic';
-    this.trackName = 'live input';
+    this.trackName = track?.label ? track.label.toLowerCase() : 'live input';
     this.duration = 0;
     this.playing = true;
+    this.music?.setLive(true);
+    this.inputGain.gain.value = 4;   // a sensible starting point for the AGC
+  }
+
+  /**
+   * Slow automatic gain for live input. Measured after the gain rather than
+   * before it, so this is a closed loop: it settles wherever the analysers see
+   * a healthy signal, whatever the source level happens to be.
+   */
+  #updateInputGain(dt) {
+    if (this.mode !== 'mic' || !this.inputGain) return;
+    let peak = 0;
+    for (let i = 1; i < this.onsetData.length; i++) {
+      if (this.onsetData[i] > peak) peak = this.onsetData[i];
+    }
+    this.micPeak = peak;
+    const g = this.inputGain.gain;
+    const rate = Math.min(1, dt * 0.9);
+    if (peak < 165) g.value = Math.min(80, g.value * (1 + rate * 0.5));
+    else if (peak > 238) g.value = Math.max(0.25, g.value * (1 - rate * 0.9));
+    this.inputGainValue = g.value;
   }
 
   togglePlay() {
@@ -269,6 +320,7 @@ export class AudioEngine {
     this.onsetAnalyser.getByteFrequencyData(this.onsetData);
     this.midAnalyser.getByteFrequencyData(this.midData);
     this.sideAnalyser.getByteFrequencyData(this.sideData);
+    this.#updateInputGain(dt);
     this.music.update(dt, this.chromaData, this.onsetData, this.midData, this.sideData);
   }
 

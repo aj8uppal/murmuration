@@ -30,6 +30,11 @@ const MAX_LAG = 75;              // 48 BPM
 
 // Where a lead vocal lives. Below this a bass guitar is also centred; above it
 // there is mostly air and cymbals, which are usually wide.
+// Piano range, roughly C2 to C7. Wide enough for a left hand, narrow enough
+// that room rumble does not win the harmonic product.
+const PITCH_LO_HZ = 65;
+const PITCH_HI_HZ = 2100;
+
 const VOICE_LO_HZ = 260;
 const VOICE_HI_HZ = 3400;
 // How much side energy to subtract before calling what is left centred.
@@ -75,6 +80,12 @@ export class MusicAnalysis {
     this.percussiveness = 0;     // struck vs bowed/held, 0..1
     this.bandAttack = new Float32Array(BAND_NAMES.length);
     this.bandSustain = new Float32Array(BAND_NAMES.length);
+
+    this.live = false;           // live input wants faster reactions than a mix
+    this.pitch = 0;              // dominant fundamental in Hz, 0 when unclear
+    this.pitchNote = '';         // nearest note name
+    this.pitchCents = 0;         // how far off that note, -50..50
+    this.pitchConfidence = 0;
 
     this.bands = new Float32Array(BAND_NAMES.length);
     this.entry = 0;              // impulse when an instrument arrives
@@ -135,6 +146,71 @@ export class MusicAnalysis {
     this.prevChromaMag = new Float32Array(chromaBins);
     this.prevOnsetMag = new Float32Array(onsetBins);
     this.binMapsBuilt = true;
+  }
+
+  /**
+   * Live playing wants faster reactions than a finished mix. A record holds a
+   * key for a whole section, so smoothing over seconds is right; someone at a
+   * piano changes chord every bar and the visuals should follow.
+   */
+  setLive(on) {
+    this.live = !!on;
+  }
+
+  get #keyTau() { return this.live ? 0.7 : 2.5; }
+  get #modeTau() { return this.live ? 0.9 : 3.0; }
+
+  /**
+   * Monophonic pitch by harmonic product spectrum: multiply the spectrum by
+   * copies of itself decimated 2x, 3x, 4x, so that a fundamental reinforced by
+   * its own harmonics beats any single loud partial. Without this, a piano's
+   * second harmonic frequently wins and the note reads an octave high.
+   */
+  #updatePitch(bytes, dt) {
+    if (!this.pitchLo) {
+      const nyquist = this.sampleRate / 2;
+      this.pitchLo = Math.max(2, Math.floor((PITCH_LO_HZ / nyquist) * bytes.length));
+      this.pitchHi = Math.min(Math.floor(bytes.length / 4),
+                              Math.ceil((PITCH_HI_HZ / nyquist) * bytes.length));
+      this.hps = new Float32Array(bytes.length);
+    }
+
+    const hps = this.hps;
+    let best = 0;
+    let bestBin = 0;
+    let total = 0;
+    for (let i = this.pitchLo; i <= this.pitchHi; i++) {
+      const v = bytes[i] / 255;
+      let prod = v;
+      prod *= bytes[i * 2] / 255;
+      prod *= bytes[i * 3] / 255;
+      prod *= bytes[i * 4] / 255;
+      hps[i] = prod;
+      total += prod;
+      if (prod > best) { best = prod; bestBin = i; }
+    }
+
+    if (best < 0.0012 || bestBin === 0) {
+      this.pitchConfidence += (0 - this.pitchConfidence) * (1 - Math.pow(0.5, dt / 0.3));
+      return;
+    }
+
+    // Parabolic interpolation across the peak, so resolution is not limited to
+    // the bin width - a semitone is narrower than a bin below about 200 Hz.
+    const a = hps[bestBin - 1] ?? 0;
+    const b = hps[bestBin];
+    const c = hps[bestBin + 1] ?? 0;
+    const denom = a - 2 * b + c;
+    const shift = denom !== 0 ? (0.5 * (a - c)) / denom : 0;
+    const hz = ((bestBin + Math.max(-1, Math.min(1, shift))) / bytes.length) * (this.sampleRate / 2);
+
+    const midi = 12 * Math.log2(hz / 440) + 69;
+    const nearest = Math.round(midi);
+    this.pitch = hz;
+    this.pitchNote = NOTE_NAMES[((nearest % 12) + 12) % 12] + (Math.floor(nearest / 12) - 1);
+    this.pitchCents = (midi - nearest) * 100;
+    const clarity = Math.min(1, (best / (total / (this.pitchHi - this.pitchLo + 1) + 1e-6)) / 22);
+    this.pitchConfidence += (clarity - this.pitchConfidence) * (1 - Math.pow(0.5, dt / 0.12));
   }
 
   #buildVoiceRange(bins) {
@@ -217,6 +293,7 @@ export class MusicAnalysis {
     const step = Math.min(dt, 0.1);
 
     if (midBytes && sideBytes) this.#updateVoice(midBytes, sideBytes, step);
+    this.#updatePitch(chromaBytes, step);
     this.#updateChroma(chromaBytes, step);
     this.#updateFlux(onsetBytes, step);
     this.#updateBands(onsetBytes, step);
@@ -241,8 +318,8 @@ export class MusicAnalysis {
     }
     if (total > 1e-6) for (let k = 0; k < 12; k++) c[k] /= total;
 
-    // Key changes slowly; average over seconds so a passing note cannot flip it.
-    const a = 1 - Math.pow(0.5, dt / 2.5);
+    // Key changes slowly; average so a passing note cannot flip it.
+    const a = 1 - Math.pow(0.5, dt / this.#keyTau);
     for (let k = 0; k < 12; k++) this.chromaSlow[k] += (c[k] - this.chromaSlow[k]) * a;
 
     this.#updateKey(dt);
@@ -271,7 +348,7 @@ export class MusicAnalysis {
     const separation = Math.abs(bestMajor - bestMinor);
     const target = Math.max(-1, Math.min(1, (bestMajor - bestMinor) * 6));
 
-    const a = 1 - Math.pow(0.5, dt / 3.0);
+    const a = 1 - Math.pow(0.5, dt / this.#modeTau);
     this.mode += (target - this.mode) * a;
     this.modeConfidence += (Math.min(1, separation * 8) - this.modeConfidence) * a;
     if (Math.max(bestMajor, bestMinor) > 0.2) {
@@ -508,6 +585,10 @@ export class MusicAnalysis {
       breath: this.breath,
       entry: this.entry,
       entryName: this.entryName,
+      pitch: this.pitch,
+      pitchNote: this.pitchNote,
+      pitchCents: this.pitchCents,
+      pitchConfidence: this.pitchConfidence,
       voice: this.voice,
       voiceConfidence: this.voiceConfidence,
       attack: this.attack,

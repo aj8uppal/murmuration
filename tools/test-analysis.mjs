@@ -211,6 +211,41 @@ function stereoPair({ centreLevel = 0, wideLevel = 0 }) {
   return [mid, side];
 }
 
+console.log('\npitch, from harmonic product spectrum');
+{
+  const dt = 1 / 60;
+  const named = (hz) => {
+    const m = new MusicAnalysis(SAMPLE_RATE);
+    // A piano-like partial series: the second harmonic is nearly as loud as
+    // the fundamental, which is what makes naive peak-picking read an octave
+    // high on real instruments.
+    const spec = new Uint8Array(CHROMA_BINS);
+    const perBin = NYQUIST / CHROMA_BINS;
+    for (const [mult, amp] of [[1, 210], [2, 200], [3, 150], [4, 110], [5, 70], [6, 45]]) {
+      const centre = (hz * mult) / perBin;
+      for (let d = -2; d <= 2; d++) {
+        const i = Math.round(centre) + d;
+        if (i < 1 || i >= CHROMA_BINS) continue;
+        spec[i] = Math.min(255, spec[i] + amp * Math.exp(-(d * d) / 1.6));
+      }
+    }
+    for (let i = 0; i < 60 * 3; i++) m.update(dt, spec, silentOnsets());
+    return m;
+  };
+
+  for (const [hz, want] of [[130.81, 'C3'], [261.63, 'C4'], [329.63, 'E4'], [440, 'A4'], [659.25, 'E5']]) {
+    const m = named(hz);
+    const err = Math.abs(1200 * Math.log2((m.pitch || 1) / hz));
+    check(`${want} (${hz.toFixed(1)} Hz) identified`, m.pitchNote === want && err < 40,
+      `got ${m.pitchNote} at ${m.pitch.toFixed(1)} Hz, ${err.toFixed(0)} cents off, conf=${m.pitchConfidence.toFixed(2)}`);
+  }
+
+  const quiet = new MusicAnalysis(SAMPLE_RATE);
+  for (let i = 0; i < 60 * 3; i++) quiet.update(dt, new Uint8Array(CHROMA_BINS), silentOnsets());
+  check('silence claims no pitch', quiet.pitchConfidence < 0.15,
+    `confidence=${quiet.pitchConfidence.toFixed(2)}`);
+}
+
 console.log('\nvoice, from centre against sides');
 {
   const spec = spectrumFor(C_MINOR);
