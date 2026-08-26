@@ -1,0 +1,464 @@
+import { Renderer } from './renderer.js';
+import { AudioEngine } from './audio.js';
+import { SONG } from './song.js';
+import { MusicAnalysis } from './analysis.js';
+
+const QUALITY = [
+  { name: 'calm',    particles: 260000, scale: 0.85 },
+  { name: 'full',    particles: 620000, scale: 1.00 },
+  { name: 'lavish',  particles: 1200000, scale: 1.00 },
+];
+
+// A phone GPU will not carry the desktop defaults, and a 3x device pixel ratio
+// makes it worse rather than better. Start light and let the user climb.
+const TOUCH = matchMedia('(pointer: coarse)').matches;
+const SMALL = Math.min(window.innerWidth, window.innerHeight) < 700;
+const HANDHELD = TOUCH && SMALL;
+const RESOLUTION_TRIM = HANDHELD ? 0.7 : 1;
+
+const $ = (sel) => document.querySelector(sel);
+
+class App {
+  constructor() {
+    this.canvas = $('#stage');
+    this.renderer = new Renderer(this.canvas);
+    this.audio = new AudioEngine();
+
+    this.time = 0;
+    this.lastFrame = performance.now();
+    this.seedTime = Math.random() * 1000;
+    this.quality = readStored('murmuration.quality', HANDHELD ? 0 : 1);
+
+    this.pointer = { x: 0, y: 0, tx: 0, ty: 0 };
+    this.cam = { zoom: 1, angle: 0, x: 0, y: 0, punch: 0 };
+    this.userZoom = 1;
+    this.userZoomTarget = 1;
+
+    this.warmth = 0;
+    this.mood = 0;        // palette bank position, 0..4
+    this.flowMode = 0;    // flow behaviour position, 0..3
+    this.breathScale = 1; // slow expansion during a lull
+    this.mood = 0;        // palette bank position, 0..4
+    this.flowMode = 0;    // flow behaviour position, 0..3
+
+    this.fps = 60;
+    this.slowFrames = 0;
+    this.autoScaled = false;
+  }
+
+  async start() {
+    try {
+      await this.renderer.init();
+    } catch (err) {
+      this.#showUnsupported(err.message);
+      return;
+    }
+
+    this.#wireUI();
+    this.#wireInput();
+
+    $('#boot').classList.add('gone');
+    $('#intro').classList.add('ready');
+
+    requestAnimationFrame(this.#loop);
+  }
+
+  #showUnsupported(message) {
+    $('#boot').classList.add('gone');
+    const panel = $('#unsupported');
+    panel.classList.add('show');
+    $('#unsupported-detail').textContent = message;
+  }
+
+  // ---------------------------------------------------------------- ui ----
+
+  #wireUI() {
+    $('#btn-song').addEventListener('click', () => this.#playSong());
+    $('#btn-ambient').addEventListener('click', () => this.#begin(() => this.audio.startAmbient()));
+    $('#btn-file').addEventListener('click', () => $('#file-input').click());
+    $('#btn-mic').addEventListener('click', () => this.#begin(() => this.audio.startMic()));
+
+    $('#file-input').addEventListener('change', (e) => {
+      const file = e.target.files?.[0];
+      if (file) this.#begin(() => this.audio.playFile(file));
+    });
+
+    $('#transport').addEventListener('click', () => {
+      this.audio.togglePlay();
+      this.#syncTransport();
+    });
+
+    const bar = $('#progress');
+    bar.addEventListener('click', (e) => {
+      const r = bar.getBoundingClientRect();
+      this.audio.seek((e.clientX - r.left) / r.width);
+    });
+
+    window.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      document.body.classList.add('dropping');
+    });
+    window.addEventListener('dragleave', () => document.body.classList.remove('dropping'));
+    window.addEventListener('drop', (e) => {
+      e.preventDefault();
+      document.body.classList.remove('dropping');
+      const file = e.dataTransfer?.files?.[0];
+      if (file && file.type.startsWith('audio')) this.#begin(() => this.audio.playFile(file));
+    });
+
+    this.spectrumCanvas = $('#ribbon');
+    this.ribbonCtx = this.spectrumCanvas.getContext('2d');
+
+    this.#setQuality(this.quality, { silent: true, persist: false });
+  }
+
+  async #playSong() {
+    const btn = $('#btn-song');
+    btn.classList.add('loading');
+    btn.disabled = true;
+    await this.#begin(() => this.audio.playUrl(SONG.src, `${SONG.title} · ${SONG.artist}`));
+    btn.classList.remove('loading');
+    btn.disabled = false;
+  }
+
+  async #begin(action) {
+    try {
+      await action();
+    } catch (err) {
+      this.#toast(err.message || String(err));
+      return;
+    }
+    this.started = true;
+    $('#intro').classList.add('gone');
+    $('#hud').classList.add('show');
+    $('#track-name').textContent = this.audio.trackName;
+    $('#progress').classList.toggle('hidden', this.audio.mode !== 'file');
+    this.#syncTransport();
+    this.#armIdleTimer();
+  }
+
+  #syncTransport() {
+    $('#transport').classList.toggle('paused', !this.audio.playing);
+  }
+
+  #toast(message) {
+    const el = $('#toast');
+    el.textContent = message;
+    el.classList.add('show');
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => el.classList.remove('show'), 4200);
+  }
+
+  #armIdleTimer() {
+    clearTimeout(this.idleTimer);
+    document.body.classList.remove('idle');
+    this.idleTimer = setTimeout(() => {
+      if (this.started) document.body.classList.add('idle');
+    }, 3200);
+  }
+
+  /**
+   * `persist` is deliberately separate from `silent`: an explicit choice should
+   * be remembered, but an automatic downgrade should not. Otherwise one busy
+   * moment on the machine pins the user to the lowest preset for good.
+   */
+  #setQuality(index, { silent = false, persist = true } = {}) {
+    this.quality = Math.max(0, Math.min(QUALITY.length - 1, index));
+    if (persist) writeStored('murmuration.quality', this.quality);
+    const q = QUALITY[this.quality];
+    this.renderer.setResolutionScale(q.scale * RESOLUTION_TRIM);
+    this.renderer.setParticleCount(q.particles);
+    $('#quality').textContent = q.name;
+    if (!silent) this.#toast(`${q.name} · ${(q.particles / 1000).toFixed(0)}k particles`);
+  }
+
+  // ------------------------------------------------------------- input ----
+
+  #wireInput() {
+    window.addEventListener('resize', () => {
+      this.renderer.resize();
+    });
+
+    // Drag, click-burst, wheel zoom and the G flow selector live in the
+    // renderer, on the canvas itself. This only feeds the off-canvas fallback
+    // position and keeps the chrome awake.
+    window.addEventListener('pointermove', (e) => {
+      const aspect = this.canvas.clientWidth / this.canvas.clientHeight;
+      this.pointer.tx = ((e.clientX / this.canvas.clientWidth) - 0.5) * 2 * aspect;
+      this.pointer.ty = (0.5 - (e.clientY / this.canvas.clientHeight)) * 2;
+      this.#armIdleTimer();
+    });
+    this.canvas.addEventListener('pointerdown', () => this.#armIdleTimer());
+
+    // Pinch: the touch equivalent of the wheel, folded into the same target.
+    let pinchStart = 0;
+    let pinchZoom = 1;
+    const spread = (t) => Math.hypot(
+      t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+
+    this.canvas.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) { pinchStart = spread(e.touches); pinchZoom = this.userZoomTarget; }
+    }, { passive: true });
+
+    this.canvas.addEventListener('touchmove', (e) => {
+      if (e.touches.length !== 2 || pinchStart <= 0) return;
+      e.preventDefault();
+      const ratio = spread(e.touches) / pinchStart;
+      this.userZoomTarget = Math.max(0.68, Math.min(1.75, pinchZoom * ratio));
+      this.#armIdleTimer();
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchend', () => { pinchStart = 0; });
+
+    // Wheel is the one input the renderer deliberately leaves to us, so it
+    // folds into camZoom here rather than being passed as `zoom`.
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const next = this.userZoomTarget * Math.exp(-e.deltaY * 0.0015);
+      this.userZoomTarget = Math.max(0.68, Math.min(1.75, next));
+      this.#armIdleTimer();
+    }, { passive: false });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.target instanceof HTMLInputElement) return;
+      switch (e.code) {
+        case 'Space':
+          e.preventDefault();
+          if (!this.started) this.#playSong();
+          else { this.audio.togglePlay(); this.#syncTransport(); }
+          break;
+        case 'Enter':
+          if (!this.started) this.#playSong();
+          break;
+        case 'KeyH':
+          document.body.classList.toggle('chrome-hidden');
+          break;
+        case 'KeyF':
+          if (document.fullscreenElement) document.exitFullscreen();
+          else document.documentElement.requestFullscreen?.();
+          break;
+        case 'KeyR':
+          this.renderer.reseed();
+          this.seedTime = Math.random() * 1000;
+          break;
+        case 'Digit0':
+          this.userZoomTarget = 1;
+          this.#toast('zoom reset');
+          break;
+        case 'KeyM':
+          this.#begin(() => this.audio.startMic());
+          break;
+        case 'Digit1': this.#setQuality(0); break;
+        case 'Digit2': this.#setQuality(1); break;
+        case 'Digit3': this.#setQuality(2); break;
+        default: break;
+      }
+    });
+  }
+
+  // -------------------------------------------------------------- loop ----
+
+  #loop = (now) => {
+    requestAnimationFrame(this.#loop);
+
+    const raw = (now - this.lastFrame) / 1000;
+    this.lastFrame = now;
+    const dt = Math.min(raw, 1 / 20);
+    this.time += dt;
+
+    this.fps += ((1 / Math.max(raw, 1e-4)) - this.fps) * 0.06;
+    this.#autoScale();
+
+    this.audio.analyse(dt);
+    this.#updateMusicality(dt);
+    this.#updateCamera(dt);
+
+    const a = this.audio;
+    const m = a.music ?? EMPTY_MUSIC;
+    // Shaders apply their own decay envelope; pass the raw impulse through.
+    const beatPulse = a.beat * Math.exp(-a.beatAge * 3.0);
+
+    this.renderer.frame({
+      time: this.time,
+      dt,
+      bass: a.bass,
+      lowMid: a.lowMid,
+      mid: a.mid,
+      high: a.high,
+      level: a.level,
+      beat: a.beat,
+      beatAge: a.beatAge,
+      flux: a.flux,
+      spectrum: a.spectrum,
+      camZoom: this.cam.zoom,
+      camAngle: this.cam.angle,
+      camX: this.cam.x,
+      camY: this.cam.y,
+      pointerX: this.pointer.x,
+      pointerY: this.pointer.y,
+      seedTime: this.seedTime,
+      exposure: 1.10 + a.level * 0.18,
+      bloomStrength: 0.72 + a.level * 0.34 + beatPulse * 0.19,
+      grain: 0.016,
+      speedScale: 1,
+      sizeScale: 1,
+      warmth: this.warmth,
+      mood: this.mood,
+      flowMode: this.flowMode,
+      tempo: m.tempo,
+      tempoConfidence: m.tempoConfidence,
+      beatPhase: m.beatPhase,
+      musicalMode: m.mode * m.modeConfidence,
+      onset: m.onset,
+      density: m.density,
+      lull: m.lull,
+      breath: m.breath,
+      entry: m.entry,
+    });
+
+    this.#drawRibbon();
+    this.#updateHud();
+  };
+
+  #autoScale() {
+    if (this.autoScaled || !this.started || this.quality === 0) return;
+    if (this.time < 4) return;
+    this.slowFrames = this.fps < 34 ? this.slowFrames + 1 : 0;
+    if (this.slowFrames > 300) {
+      this.autoScaled = true;
+      this.#setQuality(this.quality - 1, { persist: false });
+      this.#toast('eased quality for this session');
+    }
+  }
+
+  /**
+   * Turns what the music is doing into where the piece sits tonally.
+   *
+   * Major keys travel up the warm half of the palette bank and minor keys sink
+   * into the cold half, so colour follows the harmony rather than a script.
+   * Density picks the flow behaviour: sparse passages get laminar sheets, busy
+   * ones get braids and rays.
+   */
+  #updateMusicality(dt) {
+    const m = this.audio.music;
+    if (!m) return;
+
+    // Weight mode by confidence, so an ambiguous passage drifts instead of
+    // flickering between two palettes.
+    const tonal = m.mode * m.modeConfidence;
+    const moodTarget = tonal >= 0
+      ? 1.0 - tonal * 0.4 + m.density * 3.0 * tonal
+      : 2.0 + (-tonal) * 1.0 - m.lull * 1.4;
+    this.mood += (clamp(moodTarget, 0, 4) - this.mood) * Math.min(1, dt * 0.35);
+
+    const flowTarget = 3 - clamp(m.density * 3.4, 0, 3);
+    this.flowMode += (flowTarget - this.flowMode) * Math.min(1, dt * 0.25);
+
+    // The breath: the field opens out and slows as the music rests.
+    const target = 1 - m.lull * 0.16 + m.breath * 0.05;
+    this.breathScale += (target - this.breathScale) * Math.min(1, dt * 1.2);
+  }
+
+  #updateCamera(dt) {
+    const a = this.audio;
+    const t = this.time;
+
+    this.pointer.x += (this.pointer.tx - this.pointer.x) * Math.min(1, dt * 3.2);
+    this.pointer.y += (this.pointer.ty - this.pointer.y) * Math.min(1, dt * 3.2);
+
+    this.cam.punch += (0 - this.cam.punch) * Math.min(1, dt * 4.5);
+    if (a.beatAge < dt * 1.5) this.cam.punch = Math.min(0.06, 0.018 + a.beat * 0.022);
+
+    this.userZoom += (this.userZoomTarget - this.userZoom) * Math.min(1, dt * 4.5);
+    const zoomTarget = (1 + Math.sin(t * 0.021) * 0.055 - a.level * 0.05
+      + this.cam.punch) * this.userZoom * this.breathScale;
+    this.cam.zoom += (zoomTarget - this.cam.zoom) * Math.min(1, dt * 2.4);
+
+    this.cam.angle = Math.sin(t * 0.0163) * 0.026 + Math.sin(t * 0.0071) * 0.014;
+    this.cam.x = Math.sin(t * 0.0371) * 0.075 + this.pointer.x * 0.02;
+    this.cam.y = Math.cos(t * 0.0293) * 0.055 + this.pointer.y * 0.02;
+
+    // Palette drifts warm through the choruses and cools back down after.
+    const warmTarget = Math.min(1, a.level * 1.6 + a.high * 0.9);
+    this.warmth += (warmTarget - this.warmth) * Math.min(1, dt * 0.55);
+  }
+
+  #drawRibbon() {
+    const c = this.spectrumCanvas;
+    const ctx = this.ribbonCtx;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = c.clientWidth;
+    const h = c.clientHeight;
+    if (c.width !== w * dpr || c.height !== h * dpr) {
+      c.width = w * dpr;
+      c.height = h * dpr;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const spec = this.audio.spectrum;
+    const n = spec.length;
+    const bw = w / n;
+    const mid = h / 2;
+
+    const grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, 'rgba(92,190,208,0.72)');
+    grad.addColorStop(0.55, 'rgba(180,225,225,0.78)');
+    grad.addColorStop(1, 'rgba(255,178,120,0.78)');
+    ctx.fillStyle = grad;
+
+    const bar = Math.max(1, bw - 1.8);
+    for (let i = 0; i < n; i++) {
+      const v = Math.max(0.5, Math.pow(spec[i], 0.9) * (h * 0.38));
+      ctx.fillRect(i * bw, mid - v, bar, v * 2);
+    }
+  }
+
+  #updateHud() {
+    if (!this.started) return;
+    const a = this.audio;
+    if (a.mode === 'file' && a.duration > 0) {
+      const f = a.currentTime / a.duration;
+      $('#progress-fill').style.transform = `scaleX(${f})`;
+      $('#time').textContent = `${fmt(a.currentTime)} / ${fmt(a.duration)}`;
+    } else {
+      $('#time').textContent = fmt(this.time);
+    }
+    $('#fps').textContent = `${Math.round(this.fps)} fps`;
+  }
+}
+
+/**
+ * Preferences survive a reload, but a browser that refuses storage (private
+ * windows, blocked site data) must not take the piece down with it.
+ */
+function readStored(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;      // Number(null) is 0, so test first
+    const v = Number(raw);
+    return Number.isFinite(v) ? v : fallback;
+  } catch { return fallback; }
+}
+
+function writeStored(key, value) {
+  try { localStorage.setItem(key, String(value)); } catch { /* not available */ }
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+/** Stand-in before an AudioContext exists, so the frame loop stays branch-free. */
+const EMPTY_MUSIC = {
+  tempo: 0, tempoConfidence: 0, beatPhase: 0, mode: 0, modeConfidence: 0,
+  onset: 0, density: 0, lull: 0, breath: 0, entry: 0,
+};
+
+function fmt(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+const app = new App();
+// Exposed so the field can be poked from the console: viz.audio, viz.renderer.
+window.viz = app;
+app.start();

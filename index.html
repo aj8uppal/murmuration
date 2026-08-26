@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Murmuration</title>
+<meta name="description" content="A WebGPU music visualiser - a million grains of light reading the music.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='9' fill='%236fd0d8'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div id="boot">
+  <div class="boot-mark"></div>
+</div>
+
+<section id="intro">
+  <div class="intro-inner">
+    <p class="eyebrow">webgpu music visualiser</p>
+    <h1>Murmur<em>ation</em></h1>
+    <p class="blurb">
+      A million grains of light in a curl-noise field, reading the music as it
+      plays - the key it is in, the tempo it keeps, the moment an instrument
+      arrives, and the pauses where it stops to breathe.
+    </p>
+    <div class="actions">
+      <button id="btn-song" class="primary"><span>play the track</span></button>
+      <button id="btn-ambient">the nocturne</button>
+      <button id="btn-file">choose a track</button>
+      <button id="btn-mic">microphone</button>
+    </div>
+    <p class="hint">or drop an audio file anywhere · <kbd>space</kbd> to begin</p>
+  </div>
+</section>
+
+<section id="unsupported">
+  <div class="intro-inner">
+    <p class="eyebrow">unavailable</p>
+    <h1>no <em>webgpu</em></h1>
+    <p class="blurb">
+      This piece renders entirely on the GPU through WebGPU. Try Chrome or Edge 113+,
+      Safari 26+, or Firefox with WebGPU enabled.
+    </p>
+    <p id="unsupported-detail" class="detail"></p>
+  </div>
+</section>
+
+<footer id="hud">
+  <div class="hud-row">
+    <div class="hud-left">
+      <button id="transport" aria-label="play or pause">
+        <svg viewBox="0 0 24 24" class="i-pause"><rect x="7" y="5" width="3.4" height="14" rx="1"/><rect x="13.6" y="5" width="3.4" height="14" rx="1"/></svg>
+        <svg viewBox="0 0 24 24" class="i-play"><path d="M8 5.2v13.6L19 12z"/></svg>
+      </button>
+      <div class="meta">
+        <span id="track-name">—</span>
+        <span id="time" class="dim">0:00</span>
+      </div>
+    </div>
+
+    <canvas id="ribbon" aria-hidden="true"></canvas>
+
+    <div class="hud-right">
+      <span id="quality" class="pill">full</span>
+      <span id="fps" class="pill dim">60 fps</span>
+      <span class="keys">
+        <kbd>G</kbd> flow <kbd>H</kbd> chrome <kbd>F</kbd> full <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> quality
+      </span>
+    </div>
+  </div>
+  <div id="progress"><div id="progress-fill"></div></div>
+</footer>
+
+<div id="toast"></div>
+<div id="dropzone"><span>release to play</span></div>
+<input id="file-input" type="file" accept="audio/*" hidden>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

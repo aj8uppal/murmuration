@@ -1,0 +1,9 @@
+{
+  "name": "murmuration",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tools/test-analysis.mjs",
+    "serve": "./serve.sh"
+  }
+}
