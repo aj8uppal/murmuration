@@ -11,13 +11,13 @@ The flagship track is Patrick Watson's *Je te laisserai des mots*, but it reads 
 
 ![the same track sixteen seconds later, in the near-silent bar](docs/lull.jpg)
 
-The same track fifteen seconds apart: a full passage, then the near-silent bar at 1:06. Nothing is scripted - the field thins, dims and slows because the music did.
+The same track: a full passage, then the near-silent bar around 1:00. Nothing is scripted - the field thins, dims and slows because the music did.
 
 ![the solo piano opening](docs/piano.jpg)
 
 ![a sung phrase](docs/voice.jpg)
 
-And the solo piano opening against a sung phrase. The piano reads struck and warm; the voice, isolated by its centre placement rather than its pitch, arrives as a separate coherent form.
+And the solo piano opening against a sung phrase. The piano reads struck; the voice, isolated by its centre placement rather than its pitch, arrives as a separate coherent form. The two frames differ in palette because the palette travels - mode chooses the half, a slow swing carries it across the banks.
 
 ## Run it
 
