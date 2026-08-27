@@ -30,6 +30,8 @@ const STYLES = ['nebula', 'ink', 'constellation', 'ribbon', 'etching'];
 // Modes are whole rendering approaches, not treatments. Particle is the
 // simulation; voyage is a raymarch you fly through.
 const MODES = ['particle', 'voyage'];
+// 512 periods of the voyage shader's z-axis noise scale (1 / 0.155).
+const VOYAGE_WRAP = 3303.2;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -376,8 +378,10 @@ class App {
       // Exposure and bloom deliberately do NOT take the full multiplier -
       // sensitivity should make the field move more, not glare more.
       exposure: 1.10 + Math.min(0.34, a.level * 0.18 * sens),
-      bloomStrength: 0.72 + Math.min(0.55, a.level * 0.34 * sens) + beatPulse * 0.19 * transientSens,
-      grain: 0.016,
+      bloomStrength: (this.modeIndex === 1 ? 0.30 : 0.72)
+        + Math.min(0.55, a.level * 0.34 * sens) * (this.modeIndex === 1 ? 0.45 : 1)
+        + beatPulse * 0.19 * transientSens,
+      grain: this.modeIndex === 1 ? 0.007 : 0.016,
       speedScale: Math.pow(sens, 0.8),
       sizeScale: 1,
       warmth: this.warmth,
@@ -512,7 +516,10 @@ class App {
     const target = (6.0 + a.level * 30 + m.density * 12) * (1 - m.lull * 0.72)
                  * this.sensitivity;
     this.voyage.speed += (target - this.voyage.speed) * Math.min(1, dt * 1.6);
-    this.voyage.z += this.voyage.speed * dt;
+    // Wrapped on a multiple of the shader's noise period, so the field is
+    // continuous across the wrap. Unbounded, this loses float precision within
+    // a minute and the march degenerates into uniform noise.
+    this.voyage.z = (this.voyage.z + this.voyage.speed * dt) % VOYAGE_WRAP;
 
     // Bank the corridor. Pitch steers it when a clear note is playing, so a
     // rising line turns the flight.

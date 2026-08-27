@@ -1,115 +1,129 @@
-// Voyage: flying forward through space.
+// Voyage: drifting through deep space.
 //
-// A raymarch rather than a particle system. The camera advances along a
-// corridor that banks and rolls, and what rushes past is a jittered lattice of
-// glowing points plus a soft haze on the corridor wall. Everything about the
-// flight is the music's: how fast you travel, how tight the corridor is, what
-// colour the field ahead is, and how hard the walls flare on a transient.
+// Dark, with a dense field of small sharp stars, soft nebula veils behind them,
+// and a camera that wanders - yawing and pitching along a slow curved path
+// rather than driving down a straight tunnel. Nothing is at the centre; the
+// point is to pass things, not to approach anything.
 //
-// Deliberately analytic. Marching fbm at this step count would cost hundreds of
-// millions of noise evaluations per frame; a hashed lattice gives the same
-// sense of structure rushing past for a fraction of the work.
+// Three things learned the hard way and worth not undoing:
+//
+//   Stars must be SHARP. A soft 1/d^2 glow at any useful brightness reads as
+//   overlapping blobs and fills the frame; the falloff has to be tight enough
+//   that a star is a point with a small halo.
+//
+//   Space must be mostly EMPTY. A ridged-noise field thresholded near its mean
+//   puts something on almost every ray, and the result is a flat wall of haze -
+//   measured once at 0% of pixels near black.
+//
+//   Distance has to be WRAPPED. Left to accumulate it reaches the thousands
+//   within a minute, the hash loses precision, and every sample returns noise.
 
 @group(0) @binding(0) var<uniform> U : Uniforms;
 @group(0) @binding(1) var<storage, read> spectrum : array<f32>;
 
-const STEPS : i32 = 48;
+const STEPS : i32 = 30;
 
-/** Where the corridor centre sits at a given distance along it. */
-fn corridorAt(z : f32, turn : f32) -> vec2f {
-  return vec2f(sin(z * 0.055) * 2.6 + sin(z * 0.021) * 1.4,
-               cos(z * 0.043) * 1.9 + cos(z * 0.017) * 1.1) * turn;
+fn vhash(p : vec3f) -> f32 {
+  var q = fract(p * 0.1031);
+  q += dot(q, q.zyx + 31.32);
+  return fract((q.x + q.y) * q.z);
+}
+
+fn vnoise(p : vec3f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  let a = mix(vhash(i), vhash(i + vec3f(1.0, 0.0, 0.0)), u.x);
+  let b = mix(vhash(i + vec3f(0.0, 1.0, 0.0)), vhash(i + vec3f(1.0, 1.0, 0.0)), u.x);
+  let c = mix(vhash(i + vec3f(0.0, 0.0, 1.0)), vhash(i + vec3f(1.0, 0.0, 1.0)), u.x);
+  let d = mix(vhash(i + vec3f(0.0, 1.0, 1.0)), vhash(i + vec3f(1.0, 1.0, 1.0)), u.x);
+  return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
 }
 
 @fragment
 fn fs(in : FullOut) -> @location(0) vec4f {
   let ndc = (in.uv - 0.5) * vec2f(U.aspect, 1.0) * 2.0;
 
-  // Roll the horizon with the corridor's bank, so turns are felt rather than
-  // merely seen.
-  let roll = U.voyageTurn * 0.22 + U.camAngle * 1.6;
+  // The camera wanders. Yaw and pitch on slow incommensurate periods, so the
+  // path curves continuously and never repeats a heading.
+  let yaw = sin(U.time * 0.041) * 0.42 + sin(U.time * 0.017) * 0.24
+            + U.voyageTurn * 0.10;
+  let pitch = cos(U.time * 0.033) * 0.30 + cos(U.time * 0.013) * 0.18;
+  let roll = sin(U.time * 0.023) * 0.25 + U.camAngle * 1.2;
+
   let cr = cos(roll);
   let sr = sin(roll);
   let screen = vec2f(ndc.x * cr - ndc.y * sr, ndc.x * sr + ndc.y * cr);
+  var rd = normalize(vec3f(screen, 1.45 - U.level * 0.22));
 
-  // A wider field of view under pressure reads as speed.
-  let fov = 1.55 - U.level * 0.30 - U.beat * exp(-U.beatAge * 4.0) * 0.18;
-  let rd = normalize(vec3f(screen, fov));
+  let cy = cos(yaw);
+  let sy = sin(yaw);
+  rd = vec3f(rd.x * cy + rd.z * sy, rd.y, rd.z * cy - rd.x * sy);
+  let cp = cos(pitch);
+  let sp = sin(pitch);
+  rd = vec3f(rd.x, rd.y * cp - rd.z * sp, rd.y * sp + rd.z * cp);
 
   let z0 = U.voyageZ;
-  let tunnelRadius = 2.30 + U.bass * 1.15 - U.lull * 0.55;
+  // No dither. Stars are solved analytically below rather than sampled, so
+  // there is no step aliasing to break up - and jittering the start would only
+  // reintroduce the speckle it was there to hide.
+  var t = 0.5;
+  let origin = vec3f(0.0, 0.0, z0);
 
   var acc = vec3f(0.0);
-  // Dither the ray start per pixel. Marching a cell lattice on a fixed grid
-  // makes neighbouring pixels cross the same cell boundaries at the same depth,
-  // and those aligned discontinuities read as hard facets. Offsetting each ray
-  // turns that structured error into fine noise, which the bloom then hides.
-  var t = 0.35 + hash22(in.pos.xy + vec2f(U.frame * 0.37, 0.0)).x * 0.42;
-  // Steps lengthen with distance: near detail stays crisp, far haze stays cheap.
+
   for (var i = 0; i < STEPS; i = i + 1) {
-    let step = 0.16 + t * 0.085;
+    let step = 0.86 + t * 0.10;
     let p = vec3f(0.0, 0.0, z0) + rd * t;
-    let centre = corridorAt(p.z, 1.0);
-    let radial = p.xy - centre;
-    let r = length(radial);
 
-    // Lattice of points, jittered per cell, thinned near the corridor axis so
-    // there is somewhere to fly. Rotated off the world axes: an axis-aligned
-    // lattice puts its own grid planes through the vanishing point and draws a
-    // hard cross across the middle of the screen.
-    let cellSize = 1.55;
-    let lat = vec3f(
-      radial.x * 0.8827 - radial.y * 0.4699,
-      radial.x * 0.4699 + radial.y * 0.8827,
-      p.z * 0.9613 + radial.x * 0.2755);
-    let cell = floor(lat / cellSize);
-    let jitter = hash31(dot(cell, vec3f(1.0, 57.3, 113.7)));
-    // Jittered most of a cell wide. At 0.3 the sites still sat close enough to
-    // their grid that the lattice planes stayed visible as faint diagonals.
-    let site = (cell + 0.22 + jitter * 0.56) * cellSize;
-    let toSite = lat - site;
-    let d2 = dot(toSite, toSite);
+    // --- stars -------------------------------------------------------------
+    // One candidate per cell, most cells empty. Sharp falloff so these stay
+    // points with a small halo rather than merging into cloud.
+    let cellSize = 0.90;
+    let cell = floor(p / cellSize);
+    let h = hash31(dot(cell, vec3f(1.0, 57.3, 113.7)));
+    if (h.y > 0.80) {
+      let site = (cell + 0.15 + h * 0.70) * cellSize;
+      // The ray's closest approach to the star is SOLVED, not sampled. Marching
+      // a point field with discrete steps makes a star's brightness depend on
+      // where the nearest step happened to land, which differs per pixel, so a
+      // point renders as a speckled cluster and the cell grid shows as planes.
+      let toSite = site - origin;
+      let along = dot(toSite, rd);
+      if (along > 0.25) {
+        let perp2 = max(dot(toSite, toSite) - along * along, 0.0);
+        let band = fract(h.x * 3.17 + h.z * 0.41);
+        let amp = spectrum[u32(clamp(band, 0.0, 0.999) * BINS)];
+        let star = 0.0016 / (perp2 * perp2 * 9.0 + 0.0020);
+        // Falls off with distance. Without it every star on the ray weighs the
+        // same, thirty of them sum, and the frame washes out.
+        let far = 1.0 / (1.0 + along * along * 0.055);
+        let tone = clamp(0.30 + band * 0.44 + amp * 0.30 + U.warmth * 0.10, 0.0, 1.0);
+        // Bright against the dark: keeping space empty is what gives whatever
+        // does pass the room to stand out.
+        acc += palette(tone, U.mood) * min(star, 3.2) * far
+               * (1.15 + amp * 4.2 + U.beat * exp(-U.beatAge * 5.0) * 1.3);
+      }
+    }
 
-    // Each cell listens to its own part of the spectrum.
-    let bandPick = fract(jitter.x * 3.17 + jitter.z * 0.41);
-    let amp = spectrum[u32(clamp(bandPick, 0.0, 0.999) * BINS)];
-
-    let alive = step_alive(r, tunnelRadius, jitter.y);
-    // Capped: 1/d^2 is unbounded as a cell passes through the camera, and an
-    // uncapped near hit turns into a screen-filling smear.
-    // Capped well above the typical hit. At 0.085 so many samples clipped that
-    // the accumulation flattened into visible facets rather than points.
-    let glow = min(alive * (0.0014 + amp * 0.0068) / (d2 * 0.55 + 0.012), 0.34);
-
-    // Colour by which band the cell answers to, warmed by depth and transients.
-    // Spread the tone across the whole ramp, and give each cell its own offset,
-    // so the field ahead is not one colour rushing past.
-    let tone = clamp(bandPick * 0.78 + jitter.z * 0.22 + amp * 0.26
-                     + U.warmth * 0.14 + U.onset * 0.10, 0.0, 1.0);
-    acc += palette(tone, U.mood) * glow * step;
-
-    // Corridor wall: a soft shell that flares on transients.
-    let shell = exp(-pow((r - tunnelRadius) * 1.05, 2.0));
-    let wallTone = clamp(0.20 + U.high * 0.40 + U.attack * 0.25, 0.0, 1.0);
-    acc += palette(wallTone, U.mood) * shell
-           * (0.0022 + U.entry * 0.010 + U.beat * exp(-U.beatAge * 5.0) * 0.006)
-           * step;
+    // --- nebula ------------------------------------------------------------
+    // A low, wide colour wash well behind the stars. Kept faint deliberately:
+    // this is what turns into a flat wall if it is allowed any real density.
+    let neb = vnoise(p * 0.085 + vec3f(0.0, 0.0, 11.0));
+    // Gentle curve rather than a hard threshold. A steep smoothstep puts its
+    // own iso-surface across the frame as large dark wedges.
+    let veil = pow(max(neb - 0.34, 0.0) * 1.5, 2.0);
+    if (veil > 0.002) {
+      let tone = clamp(0.16 + neb * 0.42 + U.musicDensity * 0.16
+                       + U.onset * 0.08, 0.0, 1.0);
+      acc += palette(tone, U.mood) * veil * step
+             * (1.0 / (1.0 + t * 0.09))
+             * (0.0020 + U.level * 0.0060 + U.entry * 0.0110);
+    }
 
     t += step;
   }
 
-  // Depth haze so the far end of the corridor recedes rather than piling up.
-  acc *= 1.0 - U.lull * 0.45;
-  return vec4f(acc, 1.0);
-}
-
-/** Cells fade out inside the corridor and thin out far beyond its wall. */
-fn step_alive(r : f32, radius : f32, roll : f32) -> f32 {
-  // A wider hollow centre so there is visibly a corridor to fly down rather
-  // than a cloud to fly into.
-  let inner = smoothstep(radius * 0.62, radius * 1.10, r);
-  let outer = 1.0 - smoothstep(radius * 1.9, radius * 3.4, r);
-  // Smooth, not binary. A hard per-cell cutoff draws cell-shaped patches
-  // wherever the radial terms are visible through it.
-  return inner * outer * smoothstep(0.22, 0.62, roll);
+  // Distance fade, so the field recedes into black rather than piling up.
+  return vec4f(acc * (1.0 - U.lull * 0.35), 1.0);
 }

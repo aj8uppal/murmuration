@@ -515,6 +515,25 @@ export class Renderer {
       label: 'background-quarter',
     });
     this.backgroundView = this.backgroundTexture.createView();
+
+    // Voyage marches at half resolution. Wisps are soft enough that the
+    // resolution is not missed, and a full-res march of this step count is the
+    // difference between 33 fps and comfortable.
+    this.voyageTexture?.destroy();
+    this.voyageTexture = d.createTexture({
+      size: [Math.max(2, Math.ceil(w / 2)), Math.max(2, Math.ceil(h / 2))],
+      format: 'rgba16float',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      label: 'voyage-half',
+    });
+    this.voyageView = this.voyageTexture.createView();
+    this.voyageBlitBindGroup = d.createBindGroup({
+      layout: this.blitLayout,
+      entries: [
+        { binding: 0, resource: this.sampler },
+        { binding: 1, resource: this.voyageView },
+      ],
+    });
     this.blitBindGroup = d.createBindGroup({
       layout: this.blitLayout,
       entries: [
@@ -790,6 +809,22 @@ export class Renderer {
       pass.end();
     }
 
+    if (voyage) {
+      const pass = encoder.beginRenderPass({
+        label: 'voyage-half',
+        colorAttachments: [{
+          view: this.voyageView,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        }],
+      });
+      pass.setPipeline(this.voyagePipeline);
+      pass.setBindGroup(0, this.bgBindGroup);
+      pass.draw(3);
+      pass.end();
+    }
+
     if (!voyage) {
       const pass = encoder.beginRenderPass({
         label: 'background-quarter',
@@ -817,10 +852,11 @@ export class Renderer {
         }],
       });
       if (voyage) {
-        // Voyage replaces the backdrop and the particles both - it is the whole
-        // scene, marched in one pass.
-        pass.setPipeline(this.voyagePipeline);
-        pass.setBindGroup(0, this.bgBindGroup);
+        // Voyage replaces the backdrop and the particles both. It was marched
+        // at half resolution above; this upsamples it into the HDR scene so the
+        // bloom chain and grade apply to it unchanged.
+        pass.setPipeline(this.blitPipeline);
+        pass.setBindGroup(0, this.voyageBlitBindGroup);
         pass.draw(3);
       } else {
         pass.setPipeline(this.blitPipeline);
