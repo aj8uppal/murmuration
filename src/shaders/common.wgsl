@@ -63,6 +63,13 @@ struct Uniforms {
   bandSustain0   : vec4f,
   bandSustain1   : vec2f,
   composeShape   : vec2f,   // x elongation, y its axis
+  mode           : f32,     // 0 particle, 1 voyage
+  voyageZ        : f32,     // distance travelled, accumulated on the CPU
+  voyageZoom     : f32,     // the user's wheel zoom alone; the flight's optics are otherwise fixed
+  _tail          : f32,
+  voyageA        : vec4f,   // x speed, y yaw, z pitch, w roll (gaze offsets)
+  voyageB        : vec4f,   // x focus distance, y aperture, z sky count, w light count
+  voyageC        : vec4f,   // x yaw rate, y pitch rate, z roll rate (rad/s), w chorus 0..1
 };
 
 struct Particle {

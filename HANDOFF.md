@@ -18,6 +18,16 @@ wires any of them.
 | `burstStrength` | Signed shockwave gain. Positive expands; negative implodes. | Recommended `-2..2` | Direct click uses `1`; Shift-click uses `-0.8`; initially `0`. |
 | `zoom` | Optional interactive zoom multiplier applied on top of existing `camZoom`. Do not pass it if wheel zoom is already folded into `camZoom`. | Recommended `0.68..1.75` | `1`. |
 | `interactionGlow` | Optional art-direction override for the subtle local pointer/path afterglow. | `0..1` | Derived from pointer hold, burst envelope, and painted-path persistence. |
+| `mode` | Render mode. `0` runs the particle simulation; `1` runs the voyage flight, which skips the flow, sim and backdrop passes and draws the light field instead. | `0` or `1` | `0`. |
+| `voyageZ` | Distance travelled along the flight path, accumulated on the CPU and kept inside the path's period. | `0..12288` | `0`. |
+| `voyageZoom` | The user's wheel zoom alone; the flight's optics are otherwise fixed. | `0.68..1.75` | `1`. |
+| `voyageSpeed` | Current travel speed, used for the trail shutter and the bank. | `2.5..30` units/s | `0`. |
+| `voyageYaw` `voyagePitch` `voyageRoll` | Gaze offsets applied on top of the path frame, radians. | small, under `0.1` | `0`. |
+| `voyageYawRate` `voyagePitchRate` `voyageRollRate` | Rates of the gaze offsets, radians per second; the trail rewinds the pose by these over its shutter so a turn shows in the trails. | small, under `0.2` | `0`. |
+| `voyageSwell` | The chorus envelope: how far the last few seconds sit above the last half-minute. Lanterns and heroes hold larger through it. | `0..1` | `0`. |
+| `voyageFocus` | Lens focus distance along the view axis. | `16..40` | `22`. |
+| `voyageAperture` | Multiplier on every population's circle of confusion. | `1..1.2` | `1`. |
+| `voyageLights` `voyageSky` | Instance counts for the light field and the star dome; the quality presets supply them. | see `main.js` presets | `8192`, `768`. |
 
 ## Interaction already wired in `renderer.js`
 

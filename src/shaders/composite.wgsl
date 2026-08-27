@@ -31,9 +31,15 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   // Normalised so the corner always sits at 1.0, whatever the window shape.
   let rn = rl / (length(vec2f(U.aspect, 1.0)) * 0.5);
 
+  // The flight keeps its optics still: no beat warp, no beat aberration, a
+  // shallow vignette and only a trace of the anamorphic streak. Every one of
+  // those would turn an open field of lights back into a corridor.
+  let voy = clamp(U.mode, 0.0, 1.0);
+
   // Expanding ring displacement fired on each detected beat.
   let ringR = U.beatAge * 0.9;
-  let ring = exp(-pow((rn - ringR) * 7.0, 2.0)) * U.beat * exp(-U.beatAge * 3.0);
+  let ring = exp(-pow((rn - ringR) * 7.0, 2.0)) * U.beat * exp(-U.beatAge * 3.0)
+             * (1.0 - voy);
   uv += dir * ring * 0.010 / vec2f(U.aspect, 1.0);
 
   // A click bends the image around its own expanding pressure front.
@@ -43,11 +49,12 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   let br = length(bv);
   let bdir = bv / max(br, 1e-4);
   let clickRing = exp(-pow((br - U.burstAge * 0.64) * 12.0, 2.0))
-                  * U.burstStrength * exp(-U.burstAge * 2.4);
+                  * U.burstStrength * exp(-U.burstAge * 2.4) * (1.0 - voy);
   uv += bdir * clickRing * 0.015 / vec2f(U.aspect, 1.0);
 
   // Radial chromatic aberration, stronger at the edges and on transients.
-  let ca = (0.0007 + U.beat * exp(-U.beatAge * 6.0) * 0.0026 + U.level * 0.0006) * (0.20 + rn * rn * 1.2);
+  let ca = (0.0007 + U.beat * exp(-U.beatAge * 6.0) * 0.0026 * (1.0 - voy) + U.level * 0.0006)
+           * (0.20 + rn * rn * 1.2) * mix(1.0, 0.2, voy);
   let off = dir * ca / vec2f(U.aspect, 1.0);
 
   var base : vec3f;
@@ -61,15 +68,15 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   // Lulls pull even the halo back into negative space. Instrument entry
   // briefly restores a broad glow; onsets only catch the nearest highlights.
   let sty = styleAt(U.style);
-  let bloomGain = U.bloomStrength * sty.bloom * mix(1.0, 0.72, U.lull)
+  let bloomGain = U.bloomStrength * sty.bloom * mix(1.0, mix(0.72, 0.86, voy), U.lull)
                   * (1.0 + U.entry * 0.30 + U.onset * 0.06);
-  var col = base + bl * bloomGain + st * bloomGain * 0.55;
+  var col = base + bl * bloomGain + st * bloomGain * mix(0.55, 0.08, voy);
 
   // A faint local afterglow makes painted interaction read in the final grade.
   let pointerUv = vec2f(0.5 + U.pointer.x / (2.0 * U.aspect), 0.5 - U.pointer.y * 0.5);
   let pointerD = length((in.uv - pointerUv) * vec2f(U.aspect, 1.0));
   col += palette(0.72, U.mood) * exp(-pointerD * pointerD * 38.0)
-         * U.interactionGlow * 0.018;
+         * U.interactionGlow * 0.018 * (1.0 - voy);
 
   col *= U.exposure;
   col = aces(col);
@@ -79,13 +86,17 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   let shadow = mix(vec3f(0.88, 0.96, 1.06), palette(0.20, U.mood) + 0.78, 0.16);
   let highl  = mix(vec3f(1.04, 1.00, 0.94), palette(0.82, U.mood) + 0.70, 0.10);
   col *= mix(shadow, highl, smoothstep(0.10, 0.72, l));
-  col = mix(vec3f(l), col, 1.10);
+  col = mix(vec3f(l), col, mix(1.10, 1.02, voy));
   // Style contrast, pivoted at mid grey so it darkens shadows rather than
   // simply gaining the whole frame.
   col = clamp((col - 0.18) * sty.contrast + 0.18, vec3f(0.0), vec3f(1.0));
 
-  // Vignette.
-  col *= mix(1.0, 0.18, smoothstep(0.30, 1.0, rn));
+  // Vignette. The flight's is shallow and round: the deep, aspect-weighted
+  // one halves the sides of a wide frame, which reads as a corridor.
+  let rs = length((uv - 0.5) * 2.0) * 0.7071;
+  let vignette = mix(mix(1.0, 0.18, smoothstep(0.30, 1.0, rn)),
+                     1.0 - 0.16 * smoothstep(0.45, 1.0, rs), voy);
+  col *= vignette;
 
   // Animated grain, slightly heavier in the shadows where banding shows.
   let gn = hash22(in.pos.xy + vec2f(U.frame * 1.7, U.frame * 0.31)).x - 0.5;

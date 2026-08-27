@@ -47,7 +47,8 @@ Then pick a source:
 | `F` | fullscreen |
 | `R` | reseed the particle field |
 | `M` | switch to microphone |
-| `V` | cycle visual style (`shift+V` goes back) |
+| `B` | cycle render mode: particle / voyage |
+| `V` | cycle visual style within particle mode (`shift+V` goes back) |
 | `-` `=` | audio sensitivity, `\` resets it to 1.0x |
 | `G` | step through the flow behaviours (`shift+G` returns to automatic) |
 | `0` | reset zoom |
@@ -81,6 +82,52 @@ Every frame runs six GPU passes:
 Particles carry a `depth` value that drives parallax, sprite size, and brightness, so near grains defocus into bokeh while far grains stay tight and bright.
 
 Both sprite footprint and alpha are normalised against particle count - footprint by `N^-0.4`, alpha by `N^-0.2`. Total ink stays constant, so brightness does not change between presets, and total fill grows only as `N^0.2` rather than linearly. More particles buy finer detail at close to the same cost.
+
+### Modes
+
+Two rendering approaches, cycled with `B`. The piece always opens on the particles.
+They are different algorithms, not different settings.
+
+**particle** is the simulation described above: a compute pass integrating ~620k grains through a flow field, drawn as additive sprites.
+Its five styles are below.
+
+**voyage** is a flight.
+A camera moves fast along a slowly curving path through a field of lights in the black, and the piece is what passes it: every light draws a trail across the frame, bright at its head and fading down its tail, short when the music rests and long when it drives, near ones sweeping by in arcs and swelling into soft discs.
+It is meant to feel like the loops that accompany a lo-fi track - clean, quiet, and going somewhere.
+
+![the flight, in the full arrangement](docs/voyage.jpg)
+
+It is neither a particle simulation nor a raymarch.
+Every light is derived in the vertex stage from nothing but its instance index and a hash, so there is no buffer and no compute pass behind it: about eight thousand instanced sprites, drawn through a real perspective camera into the same HDR target as the particles, so the bloom chain and the grade are shared.
+Lights live in path coordinates - an arc distance along the flight and a lateral offset in the path's moving frame - and wrap inside a window around the camera, with the wrap count folded into the hash, so a light that falls behind reappears far ahead as a different one.
+The path is periodic and the CPU keeps the travelled distance inside the period, which holds float precision however long the flight.
+
+Three populations share the field.
+Dust is most of it: small points that carry depth and speed.
+Lanterns are the point of the flight: bodies of light, a quarter of them amber against whatever the mood makes of the rest, that bloom as they come close and draw the longest wakes.
+A handful of heroes are the near passes, always warm, with a compact highlight that survives focus.
+None of them is drawn as a disc - a lens-drawn disc read as a sphere, and these are lights, not objects - but as a soft gaussian body with a wide halo.
+A thin-lens model sizes each one in pixels - a circle of confusion on top of the light's own core - with focus set far out, so the middle distance is soft orbs and only the far field is crisp.
+The trail is the light's own motion across the frame over a tenth of a second, projected from the previous camera pose, soft-limited so a near pass never becomes a bar across the screen.
+Ink is roughly conserved as a light defocuses or smears - a big disc is a dim disc - but not strictly for trails, which would otherwise vanish: a long exposure is allowed to gather light.
+
+Two things had to be designed out, and both are worth knowing before touching the numbers.
+A field seen deeper than it is wide bunches into a knot at the vanishing point - the far half of the window all lands in one central ellipse - so each population fills a disc wider than the depth it can be seen to, and is faded out by view depth before that can happen.
+And the particle grade fights the flight: its beat warp, deep aspect-weighted vignette and anamorphic streak all turn an open field back into a corridor, so the flight has its own - fixed optics, a shallow round vignette, and a lower bloom knee so every light carries a halo.
+
+Everything about the flight is the music's, and nothing snaps.
+The flight breathes in phrases.
+A phrase's energy is level and density over the last couple of seconds against a seven-second baseline; rising is an inhale, falling an exhale.
+Speed swells with the inhale - roughly 5 to 30 units a second under music - and is braked almost to a stop by a lull, so a quiet passage genuinely coasts and its trails shrink back to points; it accelerates over three seconds and brakes in two.
+Each inhale also picks a direction - the way the melody has been leaning, by relative pitch; failing that, back toward the middle; failing that, the other way from last time - and the camera sweeps into a turn of five to eight seconds, banking in proportion to how fast it is turning, then a spring eases the gaze home.
+What is driven is the turn *rate*, never the heading, on a sine window with its acceleration capped, so a sweep begins and ends at rest the way a real one does.
+Driving the turn for as long as the swell lasted was tried first and parked the heading against its limit through a whole rising passage.
+The trail is projected from the previous camera pose with the turn rewound as well as the travel, so trails slant and arc through a bend.
+Underneath, the path itself bends on curves so wide that the heading turns under a degree a second at full speed, and the camera looks down the road - at a point about a second ahead - rather than along the instantaneous tangent.
+Each population listens to its own register, so the arrangement is legible in the picture: the bass lives in the big warm lights, the melody in the lanterns, the hats in the dust, each through a slower envelope than the analyser's own - at the analyser's attack the lights looked nervous rather than lit.
+The beat lands on the lights rather than the camera, as a brief swell the heroes carry most; onsets catch the nearest lanterns, an instrument's entry lifts the whole field, a busy passage fills in the dust and a lull thins it to almost nothing, the heroes breathe with the pulse the tempo tracker has locked to, and a sung phrase gathers the cool lanterns onto one hue.
+
+Voyage costs about a third of the particle pass at the same resolution (6.9 ms against 19.2 ms at 2400x1500 in headless Chrome), and skips the flow, simulation and backdrop passes entirely since none of them are visible.
 
 ### Styles
 
