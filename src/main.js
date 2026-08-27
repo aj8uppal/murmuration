@@ -1,4 +1,4 @@
-import { Renderer } from './renderer.js';
+import { Renderer, SPECTRUM_BINS } from './renderer.js';
 import { AudioEngine } from './audio.js';
 import { SONG } from './song.js';
 import { MusicAnalysis } from './analysis.js';
@@ -47,6 +47,8 @@ class App {
     this.flowMode = 0;    // flow behaviour position, 0..3
     this.breathScale = 1; // slow expansion during a lull
     this.compose = { x: 0, y: 0, stretch: 0, angle: 0, split: 0 };
+    this.sensitivity = readStored('murmuration.sensitivity', 1);
+    this.scaledSpectrum = new Float32Array(SPECTRUM_BINS);
     this.mood = 0;        // palette bank position, 0..4
     this.flowMode = 0;    // flow behaviour position, 0..3
 
@@ -120,6 +122,7 @@ class App {
     this.ribbonCtx = this.spectrumCanvas.getContext('2d');
 
     this.#setQuality(this.quality, { silent: true, persist: false });
+    $('#sensitivity').textContent = `sens ${this.sensitivity.toFixed(1)}x`;
   }
 
   /**
@@ -280,6 +283,17 @@ class App {
         case 'KeyM':
           this.#useMic();
           break;
+        case 'Minus':
+        case 'NumpadSubtract':
+          this.#setSensitivity(this.sensitivity - 0.2);
+          break;
+        case 'Equal':
+        case 'NumpadAdd':
+          this.#setSensitivity(this.sensitivity + 0.2);
+          break;
+        case 'Backslash':
+          this.#setSensitivity(1);
+          break;
         case 'Digit1': this.#setQuality(0); break;
         case 'Digit2': this.#setQuality(1); break;
         case 'Digit3': this.#setQuality(2); break;
@@ -310,19 +324,24 @@ class App {
     const m = a.music ?? EMPTY_MUSIC;
     // Shaders apply their own decay envelope; pass the raw impulse through.
     const beatPulse = a.beat * Math.exp(-a.beatAge * 3.0);
+    const sens = this.sensitivity;
+    const transientSens = Math.pow(sens, 0.6);
 
     this.renderer.frame({
       time: this.time,
       dt,
-      bass: a.bass,
-      lowMid: a.lowMid,
-      mid: a.mid,
-      high: a.high,
-      level: a.level,
-      beat: a.beat,
+      bass: Math.min(1.4, a.bass * sens),
+      lowMid: Math.min(1.4, a.lowMid * sens),
+      mid: Math.min(1.4, a.mid * sens),
+      high: Math.min(1.4, a.high * sens),
+      level: Math.min(1.3, a.level * sens),
+      // Transients scale more gently than sustained level: they drive the
+      // brightest moments, and the user has already told me once that the
+      // light pulses were too strong.
+      beat: a.beat * transientSens,
       beatAge: a.beatAge,
-      flux: a.flux,
-      spectrum: a.spectrum,
+      flux: a.flux * sens,
+      spectrum: this.#scaleSpectrum(a.spectrum, sens),
       camZoom: this.cam.zoom,
       camAngle: this.cam.angle,
       camX: this.cam.x,
@@ -330,10 +349,12 @@ class App {
       pointerX: this.pointer.x,
       pointerY: this.pointer.y,
       seedTime: this.seedTime,
-      exposure: 1.10 + a.level * 0.18,
-      bloomStrength: 0.72 + a.level * 0.34 + beatPulse * 0.19,
+      // Exposure and bloom deliberately do NOT take the full multiplier -
+      // sensitivity should make the field move more, not glare more.
+      exposure: 1.10 + Math.min(0.34, a.level * 0.18 * sens),
+      bloomStrength: 0.72 + Math.min(0.55, a.level * 0.34 * sens) + beatPulse * 0.19 * transientSens,
       grain: 0.016,
-      speedScale: 1,
+      speedScale: Math.pow(sens, 0.8),
       sizeScale: 1,
       warmth: this.warmth,
       mood: this.mood,
@@ -347,17 +368,17 @@ class App {
       tempoConfidence: m.tempoConfidence,
       beatPhase: m.beatPhase,
       musicalMode: m.mode * m.modeConfidence,
-      onset: m.onset,
+      onset: m.onset * transientSens,
       density: m.density,
       lull: m.lull,
       breath: m.breath,
-      entry: m.entry,
+      entry: m.entry * transientSens,
       pitch: m.pitch,
       pitchCents: m.pitchCents,
       pitchConfidence: m.pitchConfidence,
       voice: m.voice,
       voiceConfidence: m.voiceConfidence,
-      attack: m.attack,
+      attack: Math.min(1.3, m.attack * sens),
       percussiveness: m.percussiveness,
       bandAttack: m.bandAttack,
       bandSustain: m.bandSustain,
@@ -427,6 +448,21 @@ class App {
    * travel: a dense passage throws the mass off centre and may break it into
    * two, a lull draws it back to the middle and rounds it out.
    */
+  /** Scaled copy, so the engine's own readings stay honest for the HUD. */
+  #scaleSpectrum(spectrum, sens) {
+    if (sens === 1) return spectrum;
+    const out = this.scaledSpectrum;
+    for (let i = 0; i < spectrum.length; i++) out[i] = Math.min(1.5, spectrum[i] * sens);
+    return out;
+  }
+
+  #setSensitivity(value) {
+    this.sensitivity = clamp(Math.round(value * 10) / 10, 0.4, 3);
+    writeStored('murmuration.sensitivity', this.sensitivity);
+    $('#sensitivity').textContent = `sens ${this.sensitivity.toFixed(1)}x`;
+    this.#toast(`sensitivity ${this.sensitivity.toFixed(1)}x`);
+  }
+
   #updateComposition(dt) {
     const t = this.time;
     const m = this.audio.music ?? EMPTY_MUSIC;

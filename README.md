@@ -47,6 +47,7 @@ Then pick a source:
 | `F` | fullscreen |
 | `R` | reseed the particle field |
 | `M` | switch to microphone |
+| `-` `=` | audio sensitivity, `\` resets it to 1.0x |
 | `G` | step through the flow behaviours (`shift+G` returns to automatic) |
 | `0` | reset zoom |
 | `1` `2` `3` | quality: 260k / 620k / 1.2M particles |
@@ -79,6 +80,10 @@ Every frame runs six GPU passes:
 Particles carry a `depth` value that drives parallax, sprite size, and brightness, so near grains defocus into bokeh while far grains stay tight and bright.
 
 Both sprite footprint and alpha are normalised against particle count - footprint by `N^-0.4`, alpha by `N^-0.2`. Total ink stays constant, so brightness does not change between presets, and total fill grows only as `N^0.2` rather than linearly. More particles buy finer detail at close to the same cost.
+
+### Sensitivity
+
+`-` and `=` scale how hard the music drives the field, from 0.4x to 3x, and the setting is remembered. It deliberately does not scale everything equally: motion and structure take the full multiplier, transients take it to the power 0.6, and exposure and bloom are capped. Turning sensitivity up should make the field move more, not glare more.
 
 ### Look
 
