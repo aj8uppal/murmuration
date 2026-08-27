@@ -63,6 +63,10 @@ struct Uniforms {
   bandSustain0   : vec4f,
   bandSustain1   : vec2f,
   composeShape   : vec2f,   // x elongation, y its axis
+  mode           : f32,     // 0 particle, 1 voyage
+  voyageZ        : f32,     // distance travelled, accumulated on the CPU
+  voyageTurn     : f32,     // how hard the corridor is banking
+  _tail          : f32,
 };
 
 struct Particle {

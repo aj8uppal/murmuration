@@ -47,7 +47,8 @@ Then pick a source:
 | `F` | fullscreen |
 | `R` | reseed the particle field |
 | `M` | switch to microphone |
-| `V` | cycle visual style (`shift+V` goes back) |
+| `B` | cycle render mode: particle / voyage |
+| `V` | cycle visual style within particle mode (`shift+V` goes back) |
 | `-` `=` | audio sensitivity, `\` resets it to 1.0x |
 | `G` | step through the flow behaviours (`shift+G` returns to automatic) |
 | `0` | reset zoom |
@@ -81,6 +82,18 @@ Every frame runs six GPU passes:
 Particles carry a `depth` value that drives parallax, sprite size, and brightness, so near grains defocus into bokeh while far grains stay tight and bright.
 
 Both sprite footprint and alpha are normalised against particle count - footprint by `N^-0.4`, alpha by `N^-0.2`. Total ink stays constant, so brightness does not change between presets, and total fill grows only as `N^0.2` rather than linearly. More particles buy finer detail at close to the same cost.
+
+### Modes
+
+Two rendering approaches, cycled with `B`. They are different algorithms, not different settings.
+
+**particle** is the simulation described above: a compute pass integrating ~620k grains through a flow field, drawn as additive sprites. Its five styles are below.
+
+**voyage** is a raymarch you fly through. The camera advances down a corridor that banks and rolls, and a jittered lattice of glowing sites rushes past. Everything about the flight is the music's: travel speed comes from level and density and is braked hard by the lull, so a quiet passage genuinely coasts to a near stop; corridor width follows the bass; a confident pitch steers the bank, so a rising line turns the flight; each site answers to its own part of the spectrum and takes its colour from there; transients flare the corridor wall.
+
+It is deliberately analytic rather than noise-based - marching fbm at this step count would cost hundreds of millions of noise evaluations per frame. Two artifacts had to be designed out. An axis-aligned lattice puts its own grid planes through the vanishing point and draws a hard cross across the middle of the screen, so the lattice is rotated off the world axes. And marching a cell lattice on a fixed grid makes neighbouring pixels cross the same cell boundaries at the same depth, which reads as hard facets; dithering each ray's start turns that structured error into fine noise the bloom then hides.
+
+Voyage costs about 5.5 ms at 1920x1200, comparable to particle mode, and skips the flow, simulation and backdrop passes entirely since none of them are visible.
 
 ### Styles
 
