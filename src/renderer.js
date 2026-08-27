@@ -13,12 +13,12 @@
  */
 
 const SHADERS = [
-  'common', 'flow', 'sim', 'particles', 'background', 'blit', 'bloom', 'composite', 'voyage',
+  'common', 'flow', 'sim', 'particles', 'background', 'blit', 'bloom', 'composite',
 ];
 
 const SPECTRUM_BINS = 128;
 const PARTICLE_STRIDE = 40; // bytes: pos, vel, home, seed, life, depth, band
-const UNIFORM_FLOATS = 100;
+const UNIFORM_FLOATS = 96;
 
 const U = {
   resX: 0, resY: 1, invX: 2, invY: 3,
@@ -39,7 +39,6 @@ const U = {
   bandAttack: 80, bandSustain: 88,
   composeCentreX: 86, composeCentreY: 87,
   composeStretch: 94, composeAngle: 95,
-  mode: 96, voyageZ: 97, voyageTurn: 98,
 };
 
 function clamp01(value) {
@@ -445,20 +444,6 @@ export class Renderer {
       primitive: { topology: 'triangle-list' },
     });
 
-    // --- voyage -----------------------------------------------------------
-    // Writes into the same HDR scene target as the particle path, so the bloom
-    // chain and the whole grade apply to it without duplication.
-    this.voyagePipeline = d.createRenderPipeline({
-      layout: d.createPipelineLayout({ bindGroupLayouts: [this.bgLayout] }),
-      vertex: { module: this.modules.voyage, entryPoint: 'vsFull' },
-      fragment: {
-        module: this.modules.voyage,
-        entryPoint: 'fs',
-        targets: [{ format: 'rgba16float' }],
-      },
-      primitive: { topology: 'triangle-list' },
-    });
-
     // --- composite --------------------------------------------------------
     this.compositeLayout = d.createBindGroupLayout({
       entries: [
@@ -728,9 +713,6 @@ export class Renderer {
       trailGlow = Math.max(trailGlow, weight);
     }
     u[U.style] = state.style ?? 0;
-    u[U.mode] = state.mode ?? 0;
-    u[U.voyageZ] = state.voyageZ ?? 0;
-    u[U.voyageTurn] = state.voyageTurn ?? 0;
     u[U.composeCentreX] = state.composeCentreX ?? 0;
     u[U.composeCentreY] = state.composeCentreY ?? 0;
     u[U.composeStretch] = state.composeStretch ?? 0;
@@ -763,13 +745,12 @@ export class Renderer {
     d.queue.writeBuffer(this.uniformBuffer, 0, u);
     d.queue.writeBuffer(this.spectrumBuffer, 0, state.spectrum);
 
-    const voyage = (state.mode ?? 0) >= 0.5;
     const encoder = d.createCommandEncoder();
     const workgroups = Math.ceil(this.particleCount / 64);
 
     // The field evolves very slowly; a 60 Hz atlas is indistinguishable on a
     // 120 Hz display and halves even this already compact noise pass.
-    if (!voyage && (this.frameIndex & 1) === 0) {
+    if ((this.frameIndex & 1) === 0) {
       const pass = encoder.beginComputePass({ label: 'flow-atlas' });
       pass.setPipeline(this.flowPipeline);
       pass.setBindGroup(0, this.flowBindGroup);
@@ -777,7 +758,7 @@ export class Renderer {
       pass.end();
     }
 
-    if (!voyage) {
+    {
       const pass = encoder.beginComputePass({ label: 'sim' });
       pass.setBindGroup(0, this.simBindGroup);
       if (this.pendingInit) {
@@ -790,7 +771,7 @@ export class Renderer {
       pass.end();
     }
 
-    if (!voyage) {
+    {
       const pass = encoder.beginRenderPass({
         label: 'background-quarter',
         colorAttachments: [{
@@ -816,21 +797,13 @@ export class Renderer {
           storeOp: 'store',
         }],
       });
-      if (voyage) {
-        // Voyage replaces the backdrop and the particles both - it is the whole
-        // scene, marched in one pass.
-        pass.setPipeline(this.voyagePipeline);
-        pass.setBindGroup(0, this.bgBindGroup);
-        pass.draw(3);
-      } else {
-        pass.setPipeline(this.blitPipeline);
-        pass.setBindGroup(0, this.blitBindGroup);
-        pass.draw(3);
+      pass.setPipeline(this.blitPipeline);
+      pass.setBindGroup(0, this.blitBindGroup);
+      pass.draw(3);
 
-        pass.setPipeline(this.particlePipeline);
-        pass.setBindGroup(0, this.drawBindGroup);
-        pass.draw(4, this.particleCount);
-      }
+      pass.setPipeline(this.particlePipeline);
+      pass.setBindGroup(0, this.drawBindGroup);
+      pass.draw(4, this.particleCount);
       pass.end();
     }
 

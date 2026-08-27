@@ -27,9 +27,6 @@ const PRESETS = HANDHELD ? HANDHELD_QUALITY : QUALITY;
 // Treatment, not signal: a style changes how a grain is drawn, while mood
 // still chooses the palette and flowMode still chooses the motion.
 const STYLES = ['nebula', 'ink', 'constellation', 'ribbon', 'etching'];
-// Modes are whole rendering approaches, not treatments. Particle is the
-// simulation; voyage is a raymarch you fly through.
-const MODES = ['particle', 'voyage'];
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -56,8 +53,6 @@ class App {
     this.compose = { x: 0, y: 0, stretch: 0, angle: 0, split: 0 };
     this.sensitivity = readStored('murmuration.sensitivity', 1);
     this.styleIndex = clamp(Math.round(readStored('murmuration.style', 0)), 0, STYLES.length - 1);
-    this.modeIndex = clamp(Math.round(readStored('murmuration.mode', 0)), 0, MODES.length - 1);
-    this.voyage = { z: 0, turn: 0, speed: 0 };
     this.style = this.styleIndex;   // eased toward styleIndex, so switches glide
     this.scaledSpectrum = new Float32Array(SPECTRUM_BINS);
     this.mood = 0;        // palette bank position, 0..4
@@ -135,7 +130,6 @@ class App {
     this.#setQuality(this.quality, { silent: true, persist: false });
     $('#sensitivity').textContent = `sens ${this.sensitivity.toFixed(1)}x`;
     $('#style').textContent = STYLES[this.styleIndex];
-    $('#mode').textContent = MODES[this.modeIndex];
   }
 
   /**
@@ -310,12 +304,6 @@ class App {
         case 'KeyV':
           this.#cycleStyle(e.shiftKey ? -1 : 1);
           break;
-        case 'KeyB':
-          this.modeIndex = (this.modeIndex + 1) % MODES.length;
-          writeStored('murmuration.mode', this.modeIndex);
-          $('#mode').textContent = MODES[this.modeIndex];
-          this.#toast(MODES[this.modeIndex]);
-          break;
         case 'Digit1': this.#setQuality(0); break;
         case 'Digit2': this.#setQuality(1); break;
         case 'Digit3': this.#setQuality(2); break;
@@ -341,7 +329,6 @@ class App {
     this.#updateMusicality(dt);
     this.#updateComposition(dt);
     this.style += (this.styleIndex - this.style) * Math.min(1, dt * 2.2);
-    this.#updateVoyage(dt);
     this.#updateCamera(dt);
 
     const a = this.audio;
@@ -384,9 +371,6 @@ class App {
       mood: this.mood,
       flowMode: this.flowMode,
       style: this.style,
-      mode: this.modeIndex,
-      voyageZ: this.voyage.z,
-      voyageTurn: this.voyage.turn,
       composeCentreX: this.compose.x,
       composeCentreY: this.compose.y,
       composeStretch: this.compose.stretch,
@@ -488,7 +472,6 @@ class App {
     this.styleIndex = (this.styleIndex + step + STYLES.length) % STYLES.length;
     writeStored('murmuration.style', this.styleIndex);
     $('#style').textContent = STYLES[this.styleIndex];
-    $('#mode').textContent = MODES[this.modeIndex];
     this.#toast(STYLES[this.styleIndex]);
   }
 
@@ -497,30 +480,6 @@ class App {
     writeStored('murmuration.sensitivity', this.sensitivity);
     $('#sensitivity').textContent = `sens ${this.sensitivity.toFixed(1)}x`;
     this.#toast(`sensitivity ${this.sensitivity.toFixed(1)}x`);
-  }
-
-  /**
-   * The flight itself. Distance is accumulated on the CPU so the shader never
-   * has to integrate, and so a lull can genuinely slow the travel rather than
-   * just dimming what is already rushing past.
-   */
-  #updateVoyage(dt) {
-    const m = this.audio.music ?? EMPTY_MUSIC;
-    const a = this.audio;
-    // Cruise, plus what the music adds. The lull brakes hard: coasting to a
-    // near stop is the whole point of a quiet passage in a flight.
-    const target = (6.0 + a.level * 30 + m.density * 12) * (1 - m.lull * 0.72)
-                 * this.sensitivity;
-    this.voyage.speed += (target - this.voyage.speed) * Math.min(1, dt * 1.6);
-    this.voyage.z += this.voyage.speed * dt;
-
-    // Bank the corridor. Pitch steers it when a clear note is playing, so a
-    // rising line turns the flight.
-    const steer = m.pitchConfidence > 0.25
-      ? Math.max(-1, Math.min(1, Math.log2(Math.max(m.pitch, 1) / 220) * 0.5))
-      : 0;
-    const turnTarget = 1 + steer * 0.5 + Math.sin(this.time * 0.037) * 0.25;
-    this.voyage.turn += (turnTarget - this.voyage.turn) * Math.min(1, dt * 0.7);
   }
 
   #updateComposition(dt) {
