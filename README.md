@@ -121,6 +121,12 @@ Traced across the flagship track under continuous playback, the breath lands whe
 
 Key detection holds B minor 48% of the track and F# minor 29% - the tonic and dominant of the song's key.
 
+## Sources
+
+Anything served as plain audio with permissive CORS can be analysed: the bundled track, a dropped file, or a stream. Spotify cannot, because its playback SDK decodes through DRM and is desktop-only besides - see [docs/spotify.md](docs/spotify.md) for what is and is not possible there, and how to verify it.
+
+The input picker also selects any audio input device, which includes a loopback device such as BlackHole. That is how you point the piece at another application's output and get real analysis of it.
+
 ## Layout
 
 ```
