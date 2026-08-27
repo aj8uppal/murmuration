@@ -52,17 +52,17 @@ struct Uniforms {
   lull           : f32,
   breath         : f32,
   entry          : f32,
-  _pad0          : f32,
+  composeSplit   : f32,
   voicePresence  : f32,
   attack         : f32,
   percussiveness : f32,
   _pad1          : f32,
   bandAttack0    : vec4f,
   bandAttack1    : vec2f,
-  _pad2          : vec2f,
+  composeCentre  : vec2f,
   bandSustain0   : vec4f,
   bandSustain1   : vec2f,
-  _pad3          : vec2f,
+  composeShape   : vec2f,   // x elongation, y its axis
 };
 
 struct Particle {

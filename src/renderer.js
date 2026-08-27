@@ -34,9 +34,11 @@ const U = {
   pointerVelX: 40, pointerVelY: 41, burstX: 42, burstY: 43,
   trail0: 44, trail1: 48, trail2: 52, trail3: 56, trail4: 60, trail5: 64,
   interactionGlow: 68, phasePulse: 69, onset: 70, musicDensity: 71,
-  lull: 72, breath: 73, entry: 74,
+  lull: 72, breath: 73, entry: 74, composeSplit: 75,
   voicePresence: 76, attack: 77, percussiveness: 78,
   bandAttack: 80, bandSustain: 88,
+  composeCentreX: 86, composeCentreY: 87,
+  composeStretch: 94, composeAngle: 95,
 };
 
 function clamp01(value) {
@@ -710,6 +712,11 @@ export class Renderer {
       u[offset + 3] = node.polarity;
       trailGlow = Math.max(trailGlow, weight);
     }
+    u[U.composeCentreX] = state.composeCentreX ?? 0;
+    u[U.composeCentreY] = state.composeCentreY ?? 0;
+    u[U.composeStretch] = state.composeStretch ?? 0;
+    u[U.composeAngle] = state.composeAngle ?? 0;
+    u[U.composeSplit] = state.composeSplit ?? 0;
     u[U.interactionGlow] = state.interactionGlow
       ?? Math.max(it.glow, pointerDown * 0.8, trailGlow * 0.32);
     u[U.phasePulse] = phasePulse;

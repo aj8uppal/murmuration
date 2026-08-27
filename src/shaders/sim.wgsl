@@ -143,9 +143,25 @@ fn simMain(@builtin(global_invocation_id) gid : vec3u) {
   let audioRing = exp(-pow((rl - U.beatAge * 1.18) * 8.0, 2.0));
   acc += dir * pulse * coreOpen * (1.25 + amp * 1.9 + audioRing * 2.8);
   acc += dir * U.flux * audioRing * coreOpen * 1.4;
-  // Linear centre hold counters centrifugal evacuation; quadratic/edge terms
-  // retain the soft frame without compressing everything into a ring.
-  acc -= p.pos * 0.20;
+  // Composition. The centre hold counters centrifugal evacuation, but it pulls
+  // toward a slowly drifting point rather than the origin - otherwise the mass
+  // sits in the middle of frame forever. It can split into two lobes, and the
+  // restoring force can be made anisotropic so the silhouette elongates along
+  // an axis instead of always settling into a disc. The outer boundary below
+  // stays origin-relative, so none of this can push the field off screen.
+  let lobeA = U.composeCentre;
+  let lobeB = -U.composeCentre;
+  let toB = dot(p.pos - lobeB, p.pos - lobeB) < dot(p.pos - lobeA, p.pos - lobeA);
+  let centre = mix(lobeA, select(lobeA, lobeB, toB), U.composeSplit);
+
+  let ca = cos(U.composeShape.y);
+  let sa = sin(U.composeShape.y);
+  let rel = p.pos - centre;
+  // Into the elongation frame, scale the two axes apart, then back out.
+  let axial = vec2f(rel.x * ca + rel.y * sa, -rel.x * sa + rel.y * ca);
+  let e = 1.0 + U.composeShape.x * 1.8;
+  let scaled = vec2f(axial.x / e, axial.y * e);
+  acc -= vec2f(scaled.x * ca - scaled.y * sa, scaled.x * sa + scaled.y * ca) * 0.20;
   acc -= dir * (0.22 * rl + 0.95 * rl * rl + 4.5 * smoothstep(0.60, 1.12, rl));
 
   // The breath is a true change of state, not a camera trick. Lull rises

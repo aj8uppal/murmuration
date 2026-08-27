@@ -46,6 +46,7 @@ class App {
     this.mood = 0;        // palette bank position, 0..4
     this.flowMode = 0;    // flow behaviour position, 0..3
     this.breathScale = 1; // slow expansion during a lull
+    this.compose = { x: 0, y: 0, stretch: 0, angle: 0, split: 0 };
     this.mood = 0;        // palette bank position, 0..4
     this.flowMode = 0;    // flow behaviour position, 0..3
 
@@ -302,6 +303,7 @@ class App {
 
     this.audio.analyse(dt);
     this.#updateMusicality(dt);
+    this.#updateComposition(dt);
     this.#updateCamera(dt);
 
     const a = this.audio;
@@ -336,6 +338,11 @@ class App {
       warmth: this.warmth,
       mood: this.mood,
       flowMode: this.flowMode,
+      composeCentreX: this.compose.x,
+      composeCentreY: this.compose.y,
+      composeStretch: this.compose.stretch,
+      composeAngle: this.compose.angle,
+      composeSplit: this.compose.split,
       tempo: m.tempo,
       tempoConfidence: m.tempoConfidence,
       beatPhase: m.beatPhase,
@@ -397,6 +404,37 @@ class App {
     // The breath: the field opens out and slows as the music rests.
     const target = 1 - m.lull * 0.16 + m.breath * 0.05;
     this.breathScale += (target - this.breathScale) * Math.min(1, dt * 1.2);
+  }
+
+  /**
+   * Where the mass sits in frame, and what shape it takes.
+   *
+   * Without this the field is pinned to the origin and every minute looks like
+   * the last one. The periods are deliberately incommensurate, so the drift
+   * does not visibly repeat, and the music decides how far it is willing to
+   * travel: a dense passage throws the mass off centre and may break it into
+   * two, a lull draws it back to the middle and rounds it out.
+   */
+  #updateComposition(dt) {
+    const t = this.time;
+    const m = this.audio.music ?? EMPTY_MUSIC;
+    const ease = (rate) => Math.min(1, dt * rate);
+
+    const reach = clamp(0.20 + m.density * 0.80 - m.lull * 0.55, 0, 1);
+    const driftX = Math.sin(t * 0.0131) * 0.52 + Math.sin(t * 0.0077 + 1.7) * 0.28;
+    const driftY = Math.cos(t * 0.0109) * 0.30 + Math.sin(t * 0.0061 + 0.4) * 0.18;
+    this.compose.x += (driftX * reach - this.compose.x) * ease(0.30);
+    this.compose.y += (driftY * reach - this.compose.y) * ease(0.30);
+
+    const stretch = (Math.sin(t * 0.0089) * 0.5 + 0.5) * (0.10 + m.density * 0.60);
+    this.compose.stretch += (stretch - this.compose.stretch) * ease(0.22);
+    this.compose.angle = Math.sin(t * 0.0043) * Math.PI;
+
+    // Squared so the field spends most of its time whole and only occasionally
+    // separates - a split that is always half-present just reads as a smear.
+    const lobe = Math.max(0, Math.sin(t * 0.0057 - 1.1)) ** 2;
+    const split = lobe * clamp(m.density * 1.1 - m.lull, 0, 1);
+    this.compose.split += (split - this.compose.split) * ease(0.18);
   }
 
   #updateCamera(dt) {
