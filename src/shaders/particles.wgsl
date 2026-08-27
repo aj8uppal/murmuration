@@ -185,8 +185,13 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
   let modeEnergy = 1.0 + major * 0.035 - minor * 0.040;
   let bandEnergy = mix(0.72, 1.06, f32(instrumentBand) * 0.2);
 
-  // Desaturate toward luma for the monochrome styles.
-  let styled = mix(vec3f(luma(col)), col, sty.sat);
+  // Desaturate toward a TINTED grey rather than a neutral one. Collapsing to
+  // luma would make ink and etching stop responding to harmony altogether -
+  // they would stay the same slate whatever the music did. Tinting by the
+  // palette keeps them near-monochrome, which is their identity, while still
+  // shifting with mood as every other style does.
+  let tint = normalize(palette(0.62, U.mood) + vec3f(0.04));
+  let styled = mix(vec3f(luma(col)) * tint * 1.6, col, sty.sat);
 
   o.color = styled;
   o.sharp = sty.sharp;
