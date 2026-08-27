@@ -60,7 +60,8 @@ fn fs(in : FullOut) -> @location(0) vec4f {
 
   // Lulls pull even the halo back into negative space. Instrument entry
   // briefly restores a broad glow; onsets only catch the nearest highlights.
-  let bloomGain = U.bloomStrength * mix(1.0, 0.72, U.lull)
+  let sty = styleAt(U.style);
+  let bloomGain = U.bloomStrength * sty.bloom * mix(1.0, 0.72, U.lull)
                   * (1.0 + U.entry * 0.30 + U.onset * 0.06);
   var col = base + bl * bloomGain + st * bloomGain * 0.55;
 
@@ -79,6 +80,9 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   let highl  = mix(vec3f(1.04, 1.00, 0.94), palette(0.82, U.mood) + 0.70, 0.10);
   col *= mix(shadow, highl, smoothstep(0.10, 0.72, l));
   col = mix(vec3f(l), col, 1.10);
+  // Style contrast, pivoted at mid grey so it darkens shadows rather than
+  // simply gaining the whole frame.
+  col = clamp((col - 0.18) * sty.contrast + 0.18, vec3f(0.0), vec3f(1.0));
 
   // Vignette.
   col *= mix(1.0, 0.18, smoothstep(0.30, 1.0, rn));

@@ -10,6 +10,7 @@ struct VSOut {
   @location(1) halfLen : f32,
   @location(2) color   : vec3f,
   @location(3) alpha   : f32,
+  @location(4) sharp   : f32,
 };
 
 fn rot(v : vec2f) -> vec2f {
@@ -120,8 +121,14 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
   let articulationArea = articulatedRadius * (articulatedHalfLen + articulatedRadius);
   let articulationInk = clamp(baseArticulationArea / max(articulationArea, 1e-8),
                               0.72, 2.4);
-  let radiusFinal = articulatedRadius;
-  let halfLenFinal = articulatedHalfLen;
+  // Style treatment. Applied last so it modulates everything the music and the
+  // articulation already decided, rather than competing with them.
+  let sty = styleAt(U.style);
+  // Culled by a stable per-particle value, so the same grains persist across
+  // frames rather than the population flickering.
+  let culled = p.seed > sty.keep;
+  let radiusFinal = max(articulatedRadius * sty.radius, pixelFloor);
+  let halfLenFinal = articulatedHalfLen * sty.streak;
 
   let off = axis * (q.x * (halfLenFinal + radiusFinal)) + perp * (q.y * radiusFinal);
 
@@ -131,7 +138,7 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
   let clipPad = vec2f((halfLenFinal + radiusFinal) * U.camZoom / U.aspect,
                       (halfLenFinal + radiusFinal) * U.camZoom);
   // All six vertices collapse to one point when the complete capsule is out.
-  if (abs(centre.x) > 1.0 + clipPad.x || abs(centre.y) > 1.0 + clipPad.y) {
+  if (culled || abs(centre.x) > 1.0 + clipPad.x || abs(centre.y) > 1.0 + clipPad.y) {
     clipPos = vec2f(2.0);
   }
   o.pos     = vec4f(clipPos, 0.0, 1.0);
@@ -178,8 +185,12 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
   let modeEnergy = 1.0 + major * 0.035 - minor * 0.040;
   let bandEnergy = mix(0.72, 1.06, f32(instrumentBand) * 0.2);
 
-  o.color = col;
-  o.alpha = 0.0092 * U.density * bright * fade
+  // Desaturate toward luma for the monochrome styles.
+  let styled = mix(vec3f(luma(col)), col, sty.sat);
+
+  o.color = styled;
+  o.sharp = sty.sharp;
+  o.alpha = 0.0092 * U.density * bright * fade * sty.alpha
             * (0.40 + amp * 0.95) * (1.0 + sparkle * 1.35)
             * inkCompensation * articulationInk * visibility * quietEnergy
             * eventEnergy * modeEnergy * bandEnergy;
@@ -190,7 +201,7 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VSO
 fn fs(in : VSOut) -> @location(0) vec4f {
   // Capsule distance field -> gaussian falloff.
   let d = length(vec2f(max(abs(in.local.x) - in.halfLen, 0.0), in.local.y));
-  let a = exp(-d * d * 2.7) * in.alpha;
+  let a = exp(-d * d * 2.7 * in.sharp) * in.alpha;
   if (a < 0.00028) { discard; }
   return vec4f(in.color * a, a);
 }

@@ -35,7 +35,7 @@ const U = {
   trail0: 44, trail1: 48, trail2: 52, trail3: 56, trail4: 60, trail5: 64,
   interactionGlow: 68, phasePulse: 69, onset: 70, musicDensity: 71,
   lull: 72, breath: 73, entry: 74, composeSplit: 75,
-  voicePresence: 76, attack: 77, percussiveness: 78,
+  voicePresence: 76, attack: 77, percussiveness: 78, style: 79,
   bandAttack: 80, bandSustain: 88,
   composeCentreX: 86, composeCentreY: 87,
   composeStretch: 94, composeAngle: 95,
@@ -712,6 +712,7 @@ export class Renderer {
       u[offset + 3] = node.polarity;
       trailGlow = Math.max(trailGlow, weight);
     }
+    u[U.style] = state.style ?? 0;
     u[U.composeCentreX] = state.composeCentreX ?? 0;
     u[U.composeCentreY] = state.composeCentreY ?? 0;
     u[U.composeStretch] = state.composeStretch ?? 0;

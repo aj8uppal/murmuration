@@ -47,6 +47,7 @@ Then pick a source:
 | `F` | fullscreen |
 | `R` | reseed the particle field |
 | `M` | switch to microphone |
+| `V` | cycle visual style (`shift+V` goes back) |
 | `-` `=` | audio sensitivity, `\` resets it to 1.0x |
 | `G` | step through the flow behaviours (`shift+G` returns to automatic) |
 | `0` | reset zoom |
@@ -80,6 +81,24 @@ Every frame runs six GPU passes:
 Particles carry a `depth` value that drives parallax, sprite size, and brightness, so near grains defocus into bokeh while far grains stay tight and bright.
 
 Both sprite footprint and alpha are normalised against particle count - footprint by `N^-0.4`, alpha by `N^-0.2`. Total ink stays constant, so brightness does not change between presets, and total fill grows only as `N^0.2` rather than linearly. More particles buy finer detail at close to the same cost.
+
+### Styles
+
+Five treatments, cycled with `V` and remembered between sessions. A style changes how a grain is drawn, not what the music is doing - `mood` still chooses the palette, `flowMode` still chooses the motion, and the field still breathes.
+
+| style | identity |
+| --- | --- |
+| nebula | the original: soft silk, generous bloom |
+| ink | sparse hard-edged strokes, near-monochrome, almost no bloom |
+| constellation | tight bright points instead of filaments |
+| ribbon | long calligraphic strands, fewer and continuous |
+| etching | thin hard scratches, like dry-point |
+
+Each is a set of multipliers on radius, streak length, alpha, falloff sharpness, bloom, saturation, contrast, and what fraction of the population is drawn at all.
+
+That last one is not optional. Some looks cannot be reached by dimming: a soft wide sprite spread across the whole population covers the frame no matter how faint each one is, which is uniform fog rather than distinct forms. A sixth style, bokeh, was cut for exactly this - even culled to 0.6% of the population it would not resolve into discs, and a weak fifth option is worse than four strong ones.
+
+Integrated ink is roughly `radius * (streak + radius) * alpha / (2 * sharp)`. The first pass at these numbers left ink at 0.49 and constellation at 0.17 against nebula's 1.0, which rendered as a near-black screen and a scattering of almost nothing. Worth checking that figure when editing.
 
 ### Sensitivity
 

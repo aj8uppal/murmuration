@@ -24,6 +24,10 @@ const HANDHELD_QUALITY = [
 ];
 const PRESETS = HANDHELD ? HANDHELD_QUALITY : QUALITY;
 
+// Treatment, not signal: a style changes how a grain is drawn, while mood
+// still chooses the palette and flowMode still chooses the motion.
+const STYLES = ['nebula', 'ink', 'constellation', 'ribbon', 'etching'];
+
 const $ = (sel) => document.querySelector(sel);
 
 class App {
@@ -48,6 +52,8 @@ class App {
     this.breathScale = 1; // slow expansion during a lull
     this.compose = { x: 0, y: 0, stretch: 0, angle: 0, split: 0 };
     this.sensitivity = readStored('murmuration.sensitivity', 1);
+    this.styleIndex = clamp(Math.round(readStored('murmuration.style', 0)), 0, STYLES.length - 1);
+    this.style = this.styleIndex;   // eased toward styleIndex, so switches glide
     this.scaledSpectrum = new Float32Array(SPECTRUM_BINS);
     this.mood = 0;        // palette bank position, 0..4
     this.flowMode = 0;    // flow behaviour position, 0..3
@@ -123,6 +129,7 @@ class App {
 
     this.#setQuality(this.quality, { silent: true, persist: false });
     $('#sensitivity').textContent = `sens ${this.sensitivity.toFixed(1)}x`;
+    $('#style').textContent = STYLES[this.styleIndex];
   }
 
   /**
@@ -294,6 +301,9 @@ class App {
         case 'Backslash':
           this.#setSensitivity(1);
           break;
+        case 'KeyV':
+          this.#cycleStyle(e.shiftKey ? -1 : 1);
+          break;
         case 'Digit1': this.#setQuality(0); break;
         case 'Digit2': this.#setQuality(1); break;
         case 'Digit3': this.#setQuality(2); break;
@@ -318,6 +328,7 @@ class App {
     this.audio.analyse(dt);
     this.#updateMusicality(dt);
     this.#updateComposition(dt);
+    this.style += (this.styleIndex - this.style) * Math.min(1, dt * 2.2);
     this.#updateCamera(dt);
 
     const a = this.audio;
@@ -359,6 +370,7 @@ class App {
       warmth: this.warmth,
       mood: this.mood,
       flowMode: this.flowMode,
+      style: this.style,
       composeCentreX: this.compose.x,
       composeCentreY: this.compose.y,
       composeStretch: this.compose.stretch,
@@ -454,6 +466,13 @@ class App {
     const out = this.scaledSpectrum;
     for (let i = 0; i < spectrum.length; i++) out[i] = Math.min(1.5, spectrum[i] * sens);
     return out;
+  }
+
+  #cycleStyle(step) {
+    this.styleIndex = (this.styleIndex + step + STYLES.length) % STYLES.length;
+    writeStored('murmuration.style', this.styleIndex);
+    $('#style').textContent = STYLES[this.styleIndex];
+    this.#toast(STYLES[this.styleIndex]);
   }
 
   #setSensitivity(value) {

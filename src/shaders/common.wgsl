@@ -56,7 +56,7 @@ struct Uniforms {
   voicePresence  : f32,
   attack         : f32,
   percussiveness : f32,
-  _pad1          : f32,
+  style          : f32,   // 0 nebula 1 ink 2 constellation 3 ribbon 4 etching
   bandAttack0    : vec4f,
   bandAttack1    : vec2f,
   composeCentre  : vec2f,
@@ -282,6 +282,77 @@ fn palette(t : f32, mood : f32) -> vec3f {
   if (m < 3.0) { return mix(paletteAurora(t), paletteSilver(t), f); }
   if (m < 4.0) { return mix(paletteSilver(t), paletteNeon(t), f); }
   return paletteNeon(t);
+}
+
+/**
+ * Visual styles. These change treatment, not signal: mood still chooses the
+ * palette, flowMode still chooses the motion, the breath still breathes. A
+ * style decides how a grain is drawn, not what the music is doing.
+ *
+ * `sharp` raises the falloff exponent, which shrinks the drawn area, so `alpha`
+ * has to rise alongside it. Integrated ink is roughly
+ *
+ *     E = radius * (streak + radius) * alpha / (2 * sharp)
+ *
+ * and the first pass at these numbers put ink at E=0.49 and constellation at
+ * E=0.17 against nebula's 1.0 - which rendered as a near-black screen and a
+ * scattering of almost nothing. Keep an eye on E when editing.
+ *
+ * `keep` culls part of the population outright. Some looks cannot be reached by
+ * dimming: a soft wide sprite spread across the whole population covers the
+ * frame no matter how faint each one is, and the result is uniform fog rather
+ * than distinct discs. Bokeh needs FEWER grains, not dimmer ones.
+ */
+struct StyleParams {
+  radius   : f32,
+  streak   : f32,
+  alpha    : f32,
+  sharp    : f32,
+  bloom    : f32,
+  sat      : f32,
+  contrast : f32,
+  keep     : f32,   // fraction of the population drawn at all
+};
+
+fn styleParams(i : i32) -> StyleParams {
+  if (i == 1) {
+    // Ink: sparse, hard-edged, nearly monochrome, almost no bloom.
+    return StyleParams(1.00, 0.72, 6.20, 2.10, 0.34, 0.26, 1.42, 1.00);
+  }
+  if (i == 2) {
+    // Constellation: tight bright points rather than filaments. Bloom is pulled
+    // back because concentrating this much alpha into small cores would
+    // otherwise push clustered points deep into the ACES shoulder.
+    return StyleParams(0.92, 0.16, 8.20, 2.60, 0.62, 0.88, 1.16, 1.00);
+  }
+  if (i == 3) {
+    // Ribbon: long calligraphic strands, few and continuous.
+    return StyleParams(0.74, 3.40, 1.55, 1.55, 0.86, 1.04, 1.02, 0.55);
+  }
+  if (i == 4) {
+    // Etching: thin hard scratches, like dry-point engraving.
+    return StyleParams(0.34, 1.20, 7.40, 4.20, 0.10, 0.20, 1.30, 0.80);
+  }
+  // Nebula: the original. Soft silk and generous bloom.
+  return StyleParams(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+}
+
+/** Blended so switching styles is a transition rather than a cut. */
+fn styleAt(v : f32) -> StyleParams {
+  let c = clamp(v, 0.0, 4.0);
+  let i = i32(floor(c));
+  let f = fract(c);
+  let a = styleParams(i);
+  let b = styleParams(min(i + 1, 4));
+  return StyleParams(
+    mix(a.radius, b.radius, f),
+    mix(a.streak, b.streak, f),
+    mix(a.alpha, b.alpha, f),
+    mix(a.sharp, b.sharp, f),
+    mix(a.bloom, b.bloom, f),
+    mix(a.sat, b.sat, f),
+    mix(a.contrast, b.contrast, f),
+    mix(a.keep, b.keep, f));
 }
 
 fn aces(x : vec3f) -> vec3f {
