@@ -390,13 +390,25 @@ class App {
     const m = this.audio.music;
     if (!m) return;
 
-    // Weight mode by confidence, so an ambiguous passage drifts instead of
-    // flickering between two palettes.
+    // Mode sets the centre of gravity - minor toward the cold banks, major
+    // toward the warm ones - but it cannot be the whole story. A track that
+    // stays in one mode for three minutes would then sit in one palette for
+    // three minutes, which is what happened: on the flagship track mood moved
+    // only between 2.43 and 2.72 from end to end. Energy and a slow swing on
+    // incommensurate periods carry it across the banks regardless, so the
+    // colour still travels within the half the harmony has chosen.
+    // Folded rather than clamped. Clamping looks reasonable and is not: push a
+    // minor track's centre of gravity toward the cold end and the swing simply
+    // runs into the ceiling, pinning the palette at one bank permanently -
+    // worse than what it replaced. Folding reflects back off the ends, so the
+    // journey continues no matter where the harmony puts the centre.
     const tonal = m.mode * m.modeConfidence;
-    const moodTarget = tonal >= 0
-      ? 1.0 - tonal * 0.4 + m.density * 3.0 * tonal
-      : 2.0 + (-tonal) * 1.0 - m.lull * 1.4;
-    this.mood += (clamp(moodTarget, 0, 4) - this.mood) * Math.min(1, dt * 0.35);
+    const centre = 2.0 - tonal * 0.7;
+    const swing = Math.sin(this.time * 0.0091) * 0.70
+                + Math.sin(this.time * 0.0037 + 2.1) * 0.45;
+    const energy = (m.density - 0.5) * 0.9;
+    const moodTarget = foldRange(centre + swing + energy - m.lull * 0.6, 4);
+    this.mood += (moodTarget - this.mood) * Math.min(1, dt * 0.35);
 
     const flowTarget = 3 - clamp(m.density * 3.4, 0, 3);
     this.flowMode += (flowTarget - this.flowMode) * Math.min(1, dt * 0.25);
@@ -524,6 +536,13 @@ function writeStored(key, value) {
 }
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+/** Reflects a value back into [0, span] instead of clipping at the ends. */
+function foldRange(v, span) {
+  const period = span * 2;
+  const m = ((v % period) + period) % period;
+  return m <= span ? m : period - m;
+}
 
 /** Stand-in before an AudioContext exists, so the frame loop stays branch-free. */
 const EMPTY_BANDS = new Float32Array(6);
