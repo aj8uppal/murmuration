@@ -3,10 +3,12 @@ import { AudioEngine } from './audio.js';
 import { SONG } from './song.js';
 import { MusicAnalysis } from './analysis.js';
 
+// `lights` and `sky` are the voyage populations; sparse is the point there,
+// so lavish buys detail in the distance rather than a denser field.
 const QUALITY = [
-  { name: 'calm',    particles: 260000, scale: 0.85 },
-  { name: 'full',    particles: 620000, scale: 1.00 },
-  { name: 'lavish',  particles: 1200000, scale: 1.00 },
+  { name: 'calm',    particles: 260000, scale: 0.85, lights: 6144, sky: 384 },
+  { name: 'full',    particles: 620000, scale: 1.00, lights: 12288, sky: 768 },
+  { name: 'lavish',  particles: 1200000, scale: 1.00, lights: 18432, sky: 1152 },
 ];
 
 // A phone GPU will not carry the desktop particle counts, but it must still
@@ -18,9 +20,9 @@ const SMALL = Math.min(window.innerWidth, window.innerHeight) < 700;
 const HANDHELD = TOUCH && SMALL;
 
 const HANDHELD_QUALITY = [
-  { name: 'calm',   particles: 110000, scale: 1 },
-  { name: 'full',   particles: 240000, scale: 1 },
-  { name: 'lavish', particles: 460000, scale: 1 },
+  { name: 'calm',   particles: 110000, scale: 1, lights: 3072, sky: 256 },
+  { name: 'full',   particles: 240000, scale: 1, lights: 6144, sky: 384 },
+  { name: 'lavish', particles: 460000, scale: 1, lights: 9216, sky: 576 },
 ];
 const PRESETS = HANDHELD ? HANDHELD_QUALITY : QUALITY;
 
@@ -30,8 +32,6 @@ const STYLES = ['nebula', 'ink', 'constellation', 'ribbon', 'etching'];
 // Modes are whole rendering approaches, not treatments. Particle is the
 // simulation; voyage is a raymarch you fly through.
 const MODES = ['particle', 'voyage'];
-// 512 periods of the voyage shader's z-axis noise scale (1 / 0.155).
-const VOYAGE_WRAP = 3303.2;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -59,7 +59,11 @@ class App {
     this.sensitivity = readStored('murmuration.sensitivity', 1);
     this.styleIndex = clamp(Math.round(readStored('murmuration.style', 0)), 0, STYLES.length - 1);
     this.modeIndex = clamp(Math.round(readStored('murmuration.mode', 0)), 0, MODES.length - 1);
-    this.voyage = { z: 0, turn: 0, speed: 0 };
+    this.voyage = {
+      z: 0, speed: 0, yaw: 0, pitch: 0, roll: 0, focus: 30, aperture: 1,
+      pitchShort: 0, pitchLong: 0, steer: 0,
+    };
+    this.voyageSpectrum = new Float32Array(SPECTRUM_BINS);
     this.style = this.styleIndex;   // eased toward styleIndex, so switches glide
     this.scaledSpectrum = new Float32Array(SPECTRUM_BINS);
     this.mood = 0;        // palette bank position, 0..4
@@ -343,7 +347,6 @@ class App {
     this.#updateMusicality(dt);
     this.#updateComposition(dt);
     this.style += (this.styleIndex - this.style) * Math.min(1, dt * 2.2);
-    this.#updateVoyage(dt);
     this.#updateCamera(dt);
 
     const a = this.audio;
@@ -352,6 +355,10 @@ class App {
     const beatPulse = a.beat * Math.exp(-a.beatAge * 3.0);
     const sens = this.sensitivity;
     const transientSens = Math.pow(sens, 0.6);
+    const spectrum = this.#scaleSpectrum(a.spectrum, sens);
+    const voyage = this.modeIndex === 1;
+    this.#updateVoyage(dt, spectrum);
+    const preset = PRESETS[this.quality];
 
     this.renderer.frame({
       time: this.time,
@@ -367,7 +374,9 @@ class App {
       beat: a.beat * transientSens,
       beatAge: a.beatAge,
       flux: a.flux * sens,
-      spectrum: this.#scaleSpectrum(a.spectrum, sens),
+      // The flight reads a slower envelope: lights that flickered at the
+      // analyser's own attack looked nervous, not lit.
+      spectrum: voyage ? this.voyageSpectrum : spectrum,
       camZoom: this.cam.zoom,
       camAngle: this.cam.angle,
       camX: this.cam.x,
@@ -376,21 +385,33 @@ class App {
       pointerY: this.pointer.y,
       seedTime: this.seedTime,
       // Exposure and bloom deliberately do NOT take the full multiplier -
-      // sensitivity should make the field move more, not glare more.
-      exposure: 1.10 + Math.min(0.34, a.level * 0.18 * sens),
-      bloomStrength: (this.modeIndex === 1 ? 0.30 : 0.72)
-        + Math.min(0.55, a.level * 0.34 * sens) * (this.modeIndex === 1 ? 0.45 : 1)
-        + beatPulse * 0.19 * transientSens,
-      grain: this.modeIndex === 1 ? 0.007 : 0.016,
+      // sensitivity should make the field move more, not glare more. The
+      // flight is graded quieter still: fixed, restrained, almost no grain.
+      exposure: voyage
+        ? 1.04 + Math.min(0.10, a.level * 0.08)
+        : 1.10 + Math.min(0.34, a.level * 0.18 * sens),
+      bloomStrength: voyage
+        ? Math.min(0.78, 0.62 + a.level * 0.12)
+        : 0.72 + Math.min(0.55, a.level * 0.34 * sens) + beatPulse * 0.19 * transientSens,
+      grain: voyage ? 0.006 : 0.016,
       speedScale: Math.pow(sens, 0.8),
       sizeScale: 1,
       warmth: this.warmth,
       mood: this.mood,
       flowMode: this.flowMode,
-      style: this.style,
+      // Styles are particle treatments; the grade they carry (bloom, contrast)
+      // would otherwise leak into the flight.
+      style: this.modeIndex === 1 ? 0 : this.style,
       mode: this.modeIndex,
       voyageZ: this.voyage.z,
-      voyageTurn: this.voyage.turn,
+      voyageSpeed: this.voyage.speed,
+      voyageYaw: this.voyage.yaw,
+      voyagePitch: this.voyage.pitch,
+      voyageRoll: this.voyage.roll,
+      voyageFocus: this.voyage.focus,
+      voyageAperture: this.voyage.aperture,
+      voyageLights: preset.lights,
+      voyageSky: preset.sky,
       composeCentreX: this.compose.x,
       composeCentreY: this.compose.y,
       composeStretch: this.compose.stretch,
@@ -506,28 +527,69 @@ class App {
   /**
    * The flight itself. Distance is accumulated on the CPU so the shader never
    * has to integrate, and so a lull can genuinely slow the travel rather than
-   * just dimming what is already rushing past.
+   * just dimming what is already rushing past. Every parameter is eased here:
+   * nothing in the flight is allowed to snap.
    */
-  #updateVoyage(dt) {
+  #updateVoyage(dt, spectrum) {
     const m = this.audio.music ?? EMPTY_MUSIC;
     const a = this.audio;
-    // Cruise, plus what the music adds. The lull brakes hard: coasting to a
-    // near stop is the whole point of a quiet passage in a flight.
-    const target = (6.0 + a.level * 30 + m.density * 12) * (1 - m.lull * 0.72)
-                 * this.sensitivity;
-    this.voyage.speed += (target - this.voyage.speed) * Math.min(1, dt * 1.6);
-    // Wrapped on a multiple of the shader's noise period, so the field is
-    // continuous across the wrap. Unbounded, this loses float precision within
-    // a minute and the march degenerates into uniform noise.
-    this.voyage.z = (this.voyage.z + this.voyage.speed * dt) % VOYAGE_WRAP;
+    const v = this.voyage;
+    // Frame-rate independent first-order smoothing, by time constant.
+    const tau = (seconds) => 1 - Math.exp(-dt / seconds);
 
-    // Bank the corridor. Pitch steers it when a clear note is playing, so a
-    // rising line turns the flight.
-    const steer = m.pitchConfidence > 0.25
-      ? Math.max(-1, Math.min(1, Math.log2(Math.max(m.pitch, 1) / 220) * 0.5))
-      : 0;
-    const turnTarget = 1 + steer * 0.5 + Math.sin(this.time * 0.037) * 0.25;
-    this.voyage.turn += (turnTarget - this.voyage.turn) * Math.min(1, dt * 0.7);
+    // A slower envelope for the lights than the analyser's own: attack in a
+    // tenth of a second, release over half of one.
+    const vs = this.voyageSpectrum;
+    const up = tau(0.10);
+    const down = tau(0.55);
+    for (let i = 0; i < vs.length; i++) {
+      const s = spectrum[i];
+      vs[i] += (s - vs[i]) * (s > vs[i] ? up : down);
+    }
+
+    // Cruise, plus what the music adds. The lull brakes hard: coasting to a
+    // near stop is the whole point of a quiet passage in a flight. Braking is
+    // quicker than accelerating, as it is in anything that actually moves.
+    const sens = Math.pow(this.sensitivity, 0.55);
+    const target = clamp(
+      (2.2 + m.density * 5.3 + a.level * 1.8) * (1 - m.lull * 0.78) * sens, 0.45, 10.5);
+    v.speed += (target - v.speed) * tau(target < v.speed ? 1.8 : 3.0);
+    // The path and the field are both periodic in this, so wrapping is
+    // invisible and keeps the shader's float precision intact.
+    v.z = (v.z + v.speed * dt) % 12288;
+
+    // Pitch steers, but relatively: a line that rises above where it has been
+    // sitting turns the gaze, not the absolute note. Absolute pitch would
+    // pin the camera to one side for a whole song in a high key.
+    if (m.pitchConfidence > 0.25 && m.pitch > 20) {
+      const lp = Math.log2(m.pitch);
+      if (v.pitchLong === 0) { v.pitchLong = lp; v.pitchShort = lp; }
+      v.pitchShort += (lp - v.pitchShort) * tau(0.45);
+      v.pitchLong += (lp - v.pitchLong) * tau(4.0);
+    }
+    const conf = m.pitchConfidence;
+    const steerTarget = clamp((v.pitchShort - v.pitchLong) / 0.5, -1, 1) * conf * conf;
+    v.steer += (steerTarget - v.steer)
+             * tau(Math.abs(steerTarget) > Math.abs(v.steer) ? 1.8 : 3.0);
+
+    // The gaze. Eased and rate-limited: nothing here may ever be quick.
+    const t = this.time;
+    const tonal = m.mode * m.modeConfidence;
+    const yawTarget = v.steer * 0.035 + this.pointer.x * 0.03 + Math.sin(t * 0.041) * 0.03;
+    const pitchTarget = tonal * 0.02 + this.pointer.y * 0.02 + Math.sin(t * 0.029 + 1.0) * 0.02;
+    const rollTarget = -v.steer * 0.0105 + Math.sin(t * 0.019) * 0.0087;
+    v.yaw = approach(v.yaw, yawTarget, tau(2.0), 0.0157 * dt);
+    v.pitch = approach(v.pitch, pitchTarget, tau(2.0), 0.0096 * dt);
+    v.roll = approach(v.roll, rollTarget, tau(2.5), 0.021 * dt);
+
+    // Optics breathe with the music instead of the camera moving: a quiet
+    // passage settles the eye further ahead and opens the aperture a touch.
+    // Focus sits far out, so the lanterns of the middle distance are soft orbs
+    // and only the far field is crisp.
+    const focusTarget = 30 + m.breath * 4 + m.lull * 6;
+    v.focus += (focusTarget - v.focus) * tau(2.0);
+    const apertureTarget = 1 + a.bass * 0.08 + m.breath * 0.08;
+    v.aperture += (apertureTarget - v.aperture) * tau(0.5);
   }
 
   #updateComposition(dt) {
@@ -639,6 +701,11 @@ function writeStored(key, value) {
 }
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+/** Eases toward a target, never moving more than `maxStep` in one call. */
+function approach(current, target, k, maxStep) {
+  return current + clamp((target - current) * k, -maxStep, maxStep);
+}
 
 /** Reflects a value back into [0, span] instead of clipping at the ends. */
 function foldRange(v, span) {

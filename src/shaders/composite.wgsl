@@ -31,9 +31,15 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   // Normalised so the corner always sits at 1.0, whatever the window shape.
   let rn = rl / (length(vec2f(U.aspect, 1.0)) * 0.5);
 
+  // The flight keeps its optics still: no beat warp, no beat aberration, a
+  // shallow vignette and only a trace of the anamorphic streak. Every one of
+  // those would turn an open field of lights back into a corridor.
+  let voy = clamp(U.mode, 0.0, 1.0);
+
   // Expanding ring displacement fired on each detected beat.
   let ringR = U.beatAge * 0.9;
-  let ring = exp(-pow((rn - ringR) * 7.0, 2.0)) * U.beat * exp(-U.beatAge * 3.0);
+  let ring = exp(-pow((rn - ringR) * 7.0, 2.0)) * U.beat * exp(-U.beatAge * 3.0)
+             * (1.0 - voy);
   uv += dir * ring * 0.010 / vec2f(U.aspect, 1.0);
 
   // A click bends the image around its own expanding pressure front.
@@ -47,7 +53,8 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   uv += bdir * clickRing * 0.015 / vec2f(U.aspect, 1.0);
 
   // Radial chromatic aberration, stronger at the edges and on transients.
-  let ca = (0.0007 + U.beat * exp(-U.beatAge * 6.0) * 0.0026 + U.level * 0.0006) * (0.20 + rn * rn * 1.2);
+  let ca = (0.0007 + U.beat * exp(-U.beatAge * 6.0) * 0.0026 * (1.0 - voy) + U.level * 0.0006)
+           * (0.20 + rn * rn * 1.2);
   let off = dir * ca / vec2f(U.aspect, 1.0);
 
   var base : vec3f;
@@ -63,7 +70,7 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   let sty = styleAt(U.style);
   let bloomGain = U.bloomStrength * sty.bloom * mix(1.0, 0.72, U.lull)
                   * (1.0 + U.entry * 0.30 + U.onset * 0.06);
-  var col = base + bl * bloomGain + st * bloomGain * 0.55;
+  var col = base + bl * bloomGain + st * bloomGain * mix(0.55, 0.08, voy);
 
   // A faint local afterglow makes painted interaction read in the final grade.
   let pointerUv = vec2f(0.5 + U.pointer.x / (2.0 * U.aspect), 0.5 - U.pointer.y * 0.5);
@@ -85,7 +92,7 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   col = clamp((col - 0.18) * sty.contrast + 0.18, vec3f(0.0), vec3f(1.0));
 
   // Vignette.
-  col *= mix(1.0, 0.18, smoothstep(0.30, 1.0, rn));
+  col *= mix(1.0, mix(0.18, 0.48, voy), smoothstep(0.30, 1.0, rn));
 
   // Animated grain, slightly heavier in the shadows where banding shows.
   let gn = hash22(in.pos.xy + vec2f(U.frame * 1.7, U.frame * 0.31)).x - 0.5;

@@ -65,8 +65,10 @@ struct Uniforms {
   composeShape   : vec2f,   // x elongation, y its axis
   mode           : f32,     // 0 particle, 1 voyage
   voyageZ        : f32,     // distance travelled, accumulated on the CPU
-  voyageTurn     : f32,     // how hard the corridor is banking
+  voyageTurn     : f32,     // unused; kept so the layout stays stable
   _tail          : f32,
+  voyageA        : vec4f,   // x speed, y yaw, z pitch, w roll (gaze offsets)
+  voyageB        : vec4f,   // x focus distance, y aperture, z sky count, w light count
 };
 
 struct Particle {
