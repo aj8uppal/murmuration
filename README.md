@@ -103,6 +103,8 @@ The bus feeds three analysers, because the jobs want different windows. A 4096-b
 
 **Tempo.** A 1024-bin FFT with no smoothing gives spectral flux, resampled onto a fixed 60 Hz grid so autocorrelation lags map to a constant time base however the frame rate wanders. Autocorrelating ~8.5 s of that envelope over lags of 48-180 BPM gives the pulse. Autocorrelation is equally happy at half or double the true tempo, so candidates at both octaves are checked and the one landing in a musical range wins. A phase-locked loop tracks the beat between estimates, nudged by onsets rather than reset by them. Rubato playing genuinely defeats this - the confidence is reported honestly and the visuals scale their response by it.
 
+Live input reads a shorter stretch of history more often, so the tempo follows a player rather than a recording: measured against a 100 to 140 BPM change, live settles in 2.3s where the recorded path takes 6.9s. Recorded playback keeps the long window, which is steadier - autocorrelation over four seconds is markedly noisier than over eight, and a finished mix has no reason to need the responsiveness.
+
 **Instrument entries.** Six log-spaced bands each carry a fast and a slow envelope. A band that had been quiet and suddenly is not registers as an arrival, with a cooldown so one entry does not fire repeatedly.
 
 **The voice.** Frequency bands cannot separate a vocal from a piano - on this track they share the same octaves. Stereo placement can: a lead vocal is mixed dead centre and an arrangement is spread wide, so `(L+R)` against `(L-R)` in the vocal band isolates the singer where a frequency split cannot.

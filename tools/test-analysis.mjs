@@ -92,6 +92,50 @@ for (const bpm of [90, 120, 140]) {
     `got ${m.tempo.toFixed(1)} conf=${m.tempoConfidence.toFixed(2)}`);
 }
 
+console.log('\nlive tempo follows a change');
+{
+  const dt = 1 / 60;
+  const pulse = (bpm) => {
+    const period = 60 / bpm;
+    return (i) => {
+      const phase = ((i / 60) % period) / period;
+      const env = Math.exp(-phase * 14);
+      const b = new Uint8Array(ONSET_BINS);
+      for (let k = 1; k < ONSET_BINS; k++) b[k] = Math.min(255, 200 * env * (1 - k / ONSET_BINS));
+      return b;
+    };
+  };
+  const spec = spectrumFor(C_MAJOR);
+
+  // Play at 100, then switch to 140, and see how long each mode takes to
+  // follow. Live trades window length for responsiveness; the recorded path
+  // keeps the steadier long window.
+  const settle = (live) => {
+    const m = new MusicAnalysis(SAMPLE_RATE);
+    m.setLive(live);
+    const a = pulse(100);
+    for (let i = 0; i < 60 * 22; i++) m.update(dt, spec, a(i));
+    const before = m.tempo;
+    const b = pulse(140);
+    let took = null;
+    for (let i = 0; i < 60 * 30; i++) {
+      m.update(dt, spec, b(i));
+      if (took === null && Math.abs(m.tempo - 140) < 140 * 0.06) took = i / 60;
+    }
+    return { before, after: m.tempo, took };
+  };
+
+  const rec = settle(false);
+  const live = settle(true);
+  check('recorded mode locks 100 BPM', Math.abs(rec.before - 100) < 8, `got ${rec.before.toFixed(1)}`);
+  check('live mode locks 100 BPM', Math.abs(live.before - 100) < 8, `got ${live.before.toFixed(1)}`);
+  check('live still reaches the new tempo', live.took !== null && Math.abs(live.after - 140) < 12,
+    `settled ${live.after.toFixed(1)} after ${live.took === null ? 'never' : live.took.toFixed(1) + 's'}`);
+  check('live follows at least as fast as recorded',
+    live.took !== null && (rec.took === null || live.took <= rec.took + 0.5),
+    `live ${live.took === null ? 'never' : live.took.toFixed(1) + 's'} vs recorded ${rec.took === null ? 'never' : rec.took.toFixed(1) + 's'}`);
+}
+
 console.log('\ndensity, lull and breath');
 {
   const loudBand = () => {

@@ -474,28 +474,34 @@ export class MusicAnalysis {
       }
     }
 
-    if (this.tempoClock < 0.5) return;
+    // Someone playing live wants the tempo to follow them, so live input reads
+    // a shorter stretch of history more often. A recording gets the long window,
+    // which is steadier: autocorrelation over 4s is markedly noisier than over
+    // 8s, and a finished mix has no reason to need the responsiveness.
+    const span = this.live ? FLUX_LEN / 2 : FLUX_LEN;
+    if (this.tempoClock < (this.live ? 0.3 : 0.5)) return;
     this.tempoClock = 0;
 
-    // Unwrap the ring into chronological order and remove the mean.
-    const x = new Float32Array(FLUX_LEN);
+    // Unwrap the most recent `span` samples in order and remove the mean.
+    const x = new Float32Array(span);
     let mean = 0;
-    for (let i = 0; i < FLUX_LEN; i++) {
-      x[i] = this.flux[(this.fluxHead + i) % FLUX_LEN];
+    for (let i = 0; i < span; i++) {
+      x[i] = this.flux[(this.fluxHead + FLUX_LEN - span + i) % FLUX_LEN];
       mean += x[i];
     }
-    mean /= FLUX_LEN;
+    mean /= span;
     let energy = 0;
-    for (let i = 0; i < FLUX_LEN; i++) { x[i] -= mean; energy += x[i] * x[i]; }
+    for (let i = 0; i < span; i++) { x[i] -= mean; energy += x[i] * x[i]; }
     if (energy < 1e-9) return;
 
     let best = 0;
     let bestLag = 0;
     const ac = new Float32Array(MAX_LAG + 1);
-    for (let lag = MIN_LAG; lag <= MAX_LAG; lag++) {
+    const maxLag = Math.min(MAX_LAG, Math.floor(span / 3));
+    for (let lag = MIN_LAG; lag <= maxLag; lag++) {
       let s = 0;
-      for (let i = 0; i < FLUX_LEN - lag; i++) s += x[i] * x[i + lag];
-      s /= (FLUX_LEN - lag);
+      for (let i = 0; i < span - lag; i++) s += x[i] * x[i + lag];
+      s /= (span - lag);
       ac[lag] = s;
       if (s > best) { best = s; bestLag = lag; }
     }
@@ -513,12 +519,13 @@ export class MusicAnalysis {
     }
 
     const bpm = 60 * FLUX_HZ / lag;
-    const norm = energy / FLUX_LEN;
+    const norm = energy / span;
     const confidence = Math.max(0, Math.min(1, best / (norm + 1e-9)));
 
     if (confidence > 0.12) {
       const prev = this.tempo;
-      this.tempo = prev === 0 ? bpm : prev + (bpm - prev) * 0.28;
+      const follow = this.live ? 0.45 : 0.28;
+      this.tempo = prev === 0 ? bpm : prev + (bpm - prev) * follow;
       if (prev > 0) this.tempoDrift = this.tempo - prev;
     }
     this.tempoConfidence += (confidence - this.tempoConfidence) * 0.4;
