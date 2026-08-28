@@ -237,6 +237,11 @@ class App {
       status.textContent = 'needs a SoundCloud app id - see src/config.js - or capture a tab instead';
       return;
     }
+    if (!sc.connected && !sc.canExchange) {
+      $('#sc-connect').hidden = true;
+      status.textContent = 'needs the token proxy to finish a sign-in - see src/config.js - or capture a tab instead';
+      return;
+    }
     if (!sc.connected) { status.textContent = 'connect to play a track from SoundCloud'; return; }
     status.textContent = 'connected';
     try {

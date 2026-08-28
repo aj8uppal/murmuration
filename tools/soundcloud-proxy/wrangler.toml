@@ -1,0 +1,9 @@
+name = "murmuration-soundcloud"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+SC_CLIENT_ID = "1RFTFW4l52Sh1Vii1F2yWx7o2O2E62n9"
+ALLOWED_ORIGIN = "https://aj8uppal.github.io"
+
+# The secret is not a var: `npx wrangler secret put SC_CLIENT_SECRET`.

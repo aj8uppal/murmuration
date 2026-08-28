@@ -7,6 +7,12 @@
  * tokens live in localStorage; access tokens last about an hour and refresh
  * tokens are single use, so a refresh always stores the new pair.
  *
+ * One wrinkle: SoundCloud requires the app's client secret for the token
+ * exchange even with PKCE, and a secret cannot live on a public page. So the
+ * exchange goes through a small proxy that holds it (tools/soundcloud-proxy),
+ * when one is configured; without one, only a secret kept in localStorage on
+ * your own machine lets the page call SoundCloud directly.
+ *
  * With a token, a SoundCloud URL resolves to a track, and a playable track's
  * `/streams` gives a URL for its transcoded audio. Whether that URL can be
  * analysed - not just played - depends on the media CDN sending CORS headers;
@@ -24,13 +30,18 @@ const TOKENS = 'murmuration.soundcloud.tokens';
 const PENDING = 'murmuration.soundcloud.pending';
 
 export class SoundCloud {
-  constructor({ clientId, redirectUri }) {
+  constructor({ clientId, redirectUri, tokenProxy }) {
     this.clientId = clientId || readStored('murmuration.soundcloud.clientId') || '';
     this.redirectUri = redirectUri;
+    this.tokenProxy = tokenProxy || readStored('murmuration.soundcloud.tokenProxy') || '';
+    this.clientSecret = readStored('murmuration.soundcloud.clientSecret') || '';
     this.tokens = readJson(TOKENS);
   }
 
   get configured() { return Boolean(this.clientId); }
+
+  /** Whether a sign-in could be completed: a proxy, or a local secret. */
+  get canExchange() { return Boolean(this.tokenProxy || this.clientSecret); }
 
   get connected() { return Boolean(this.tokens?.refresh_token || (this.tokens?.access_token && !this.#expired())); }
 
@@ -40,6 +51,7 @@ export class SoundCloud {
    */
   async connect(pendingUrl = '') {
     if (!this.configured) throw new Error('SoundCloud needs a client id - see src/config.js');
+    if (!this.canExchange) throw new Error('SoundCloud needs the token proxy to finish a sign-in - see src/config.js');
     const verifier = randomString(64);
     const challenge = base64url(await sha256(verifier));
     const state = randomString(24);
@@ -158,12 +170,28 @@ export class SoundCloud {
   }
 
   async #exchange(body) {
-    const res = await fetch(`${AUTH}/oauth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json; charset=utf-8' },
-      body: new URLSearchParams(body),
-    });
-    if (!res.ok) { this.disconnect(); throw new Error(`SoundCloud refused the sign-in (${res.status})`); }
+    let res;
+    if (this.tokenProxy) {
+      // The proxy adds the client id and secret and forwards the rest.
+      const { client_id, ...rest } = body;
+      res = await fetch(this.tokenProxy, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json; charset=utf-8' },
+        body: JSON.stringify(rest),
+      });
+    } else {
+      res = await fetch(`${AUTH}/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json; charset=utf-8' },
+        body: new URLSearchParams({ ...body, client_secret: this.clientSecret }),
+      });
+    }
+    if (!res.ok) {
+      this.disconnect();
+      let why = '';
+      try { why = (await res.json()).error ?? ''; } catch { /* no body */ }
+      throw new Error(`SoundCloud refused the sign-in (${res.status}${why ? `, ${why}` : ''})`);
+    }
     const t = await res.json();
     this.tokens = {
       access_token: t.access_token,

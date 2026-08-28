@@ -9,6 +9,14 @@
  */
 export const SOUNDCLOUD = {
   clientId: '1RFTFW4l52Sh1Vii1F2yWx7o2O2E62n9',
+  // SoundCloud requires the client secret for the token exchange even with
+  // PKCE, and the secret cannot live on a public page. `tokenProxy` is the
+  // URL of the worker in tools/soundcloud-proxy, which holds it; the page
+  // sends the code and verifier there and gets the tokens back. Empty, the
+  // page calls SoundCloud directly, which works only with a secret in
+  // localStorage under `murmuration.soundcloud.clientSecret` - for a local
+  // test on your own machine, never for a deployed page.
+  tokenProxy: '',
   // The page's own URL, as a directory: the same string whether it was
   // opened as `/` or `/index.html`. It must match the app's registered
   // redirect URI character for character - scheme and trailing slash
