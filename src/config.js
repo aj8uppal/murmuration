@@ -9,12 +9,11 @@
  */
 export const SOUNDCLOUD = {
   clientId: '1RFTFW4l52Sh1Vii1F2yWx7o2O2E62n9',
-  // Must be, character for character, the redirect URI the app was
-  // registered with: SoundCloud compares the strings and answers a blank
-  // sign-in page otherwise. Its app form keeps the URI without a scheme
-  // or trailing slash, so this is the registered form of the deployed
-  // page, `https://aj8uppal.github.io/murmuration/`; GitHub Pages turns the
-  // bare path into the directory URL, query and all. For local work,
-  // register `http://localhost:8173/` and set this to match.
-  redirectUri: 'aj8uppal.github.io/murmuration',
+  // The page's own URL, as a directory: the same string whether it was
+  // opened as `/` or `/index.html`. It must match the app's registered
+  // redirect URI character for character - scheme and trailing slash
+  // included - or SoundCloud answers a blank sign-in page. Register
+  // `https://aj8uppal.github.io/murmuration/` for the deployed page and
+  // `http://localhost:8173/` for local work.
+  redirectUri: `${location.origin}${location.pathname.replace(/index\.html$/, '')}`,
 };

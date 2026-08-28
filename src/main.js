@@ -283,15 +283,17 @@ class App {
     }
   }
 
-  /** Finishes a sign-in on the way back from SoundCloud, if this is one. */
+  /** Finishes a sign-in on the way back from SoundCloud, if this is one.
+   *  Whatever happens shows in the panel, which stays open. */
   async #resumeSoundCloud() {
+    if (!new URLSearchParams(location.search).has('code')) return;
+    $('#sc-panel').hidden = false;
     try {
       const pending = await this.soundcloud.handleRedirect();
-      if (pending === null) return;
-      $('#sc-panel').hidden = false;
       if (pending) $('#sc-url').value = pending;
       await this.#syncSoundCloud();
     } catch (err) {
+      $('#sc-status').textContent = err.message;
       this.#toast(err.message);
     }
   }
