@@ -125,6 +125,10 @@ class App {
     this.#wireUI();
     this.#wireInput();
     this.#resumeSoundCloud();
+    // Said once, for the person wondering why a machine is slow: which
+    // adapter, how many pixels. `viz.renderer.describe()` repeats it.
+    console.info(`murmuration · ${this.renderer.describe()}`);
+    if (this.renderer.softwareAdapter) this.#toast('no GPU acceleration in this browser - the piece will be slow');
 
     $('#boot').classList.add('gone');
     $('#intro').classList.add('ready');
@@ -478,6 +482,9 @@ class App {
         case 'KeyF':
           if (document.fullscreenElement) document.exitFullscreen();
           else document.documentElement.requestFullscreen?.();
+          break;
+        case 'KeyI':
+          this.#toast(this.renderer.describe());
           break;
         case 'KeyR':
           this.renderer.reseed();

@@ -173,6 +173,9 @@ export class Renderer {
       },
     });
     this.adapterInfo = adapter.info ?? {};
+    // Whether the browser gave the piece a real GPU: a fallback adapter is
+    // software rendering, and the piece will crawl on it.
+    this.softwareAdapter = Boolean(adapter.isFallbackAdapter);
 
     this.device.lost.then((info) => {
       if (info.reason !== 'destroyed') console.error('WebGPU device lost:', info.message);
@@ -896,6 +899,15 @@ export class Renderer {
     this.particleCount = n;
     this.#createParticleBuffer();
     this.reseed();
+  }
+
+  /** What the piece is drawing with and how many pixels: the answer to
+   *  "why is it slow here", in one line for the console and the HUD. */
+  describe() {
+    const a = this.adapterInfo;
+    const gpu = [a.description, a.architecture, a.vendor].find((x) => x) || 'unknown gpu';
+    const mp = (this.width * this.height / 1e6).toFixed(1);
+    return `${gpu}${this.softwareAdapter ? ' (software fallback)' : ''} · ${this.width}×${this.height} (${mp} MP) · dpr ${(window.devicePixelRatio || 1).toFixed(2)}`;
   }
 
   setResolutionScale(s) {

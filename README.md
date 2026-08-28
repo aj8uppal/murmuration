@@ -45,6 +45,7 @@ Then pick a source:
 | `space` | play / pause (or start the nocturne) |
 | `H` | hide the chrome |
 | `F` | fullscreen |
+| `I` | what the piece is drawing with: the GPU adapter and the render size in pixels; the same line is printed to the console at start |
 | `R` | reseed the particle field |
 | `M` | switch to microphone |
 | `B` | cycle render mode - only with `?modes=all`, which brings the experimental voyage, current and plate back into the cycle |
