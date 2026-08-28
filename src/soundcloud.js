@@ -31,10 +31,12 @@ const PENDING = 'murmuration.soundcloud.pending';
 
 export class SoundCloud {
   constructor({ clientId, redirectUri, tokenProxy }) {
-    this.clientId = clientId || readStored('murmuration.soundcloud.clientId') || '';
+    // Trimmed: a pasted value with a stray space or quote is refused by
+    // SoundCloud as an invalid client, with nothing to say which.
+    this.clientId = clean(clientId || readStored('murmuration.soundcloud.clientId'));
     this.redirectUri = redirectUri;
-    this.tokenProxy = tokenProxy || readStored('murmuration.soundcloud.tokenProxy') || '';
-    this.clientSecret = readStored('murmuration.soundcloud.clientSecret') || '';
+    this.tokenProxy = clean(tokenProxy || readStored('murmuration.soundcloud.tokenProxy'));
+    this.clientSecret = clean(readStored('murmuration.soundcloud.clientSecret'));
     this.tokens = readJson(TOKENS);
   }
 
@@ -220,6 +222,10 @@ export function base64url(bytes) {
   let s = '';
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function clean(value) {
+  return String(value ?? '').trim().replace(/^["']|["']$/g, '');
 }
 
 function readStored(key) {
