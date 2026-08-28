@@ -83,7 +83,6 @@ class App {
     };
     this.voyageSpectrum = new Float32Array(SPECTRUM_BINS);
     this.soundcloud = new SoundCloud(SOUNDCLOUD);
-    this.streamWarned = false;
     this.wakeLock = null;
     // The sculpture: the music's hold on the form. Its camera is the
     // flight's. The evolution clock starts somewhere, so no two loads open
@@ -268,24 +267,46 @@ class App {
     const btn = $('#sc-play');
     btn.classList.add('loading');
     btn.disabled = true;
+    $('#sc-capture').hidden = true;
     try {
       const track = await sc.resolve(url);
       if (track.access !== 'playable') {
+        // A label's track: SoundCloud offers a preview at most off its own
+        // player. The way to it is the player itself, in a tab, captured.
+        this.#offerCapture(track);
         throw new Error(track.access === 'preview'
-          ? 'SoundCloud offers only a preview of that track off-platform - capture a tab instead'
-          : 'that track cannot be streamed off SoundCloud - capture a tab instead');
+          ? "SoundCloud allows only a 30-second preview of that track outside its own player - open it there and capture the tab"
+          : "that track cannot be streamed outside SoundCloud's own player - open it there and capture the tab");
       }
-      const streamUrl = SoundCloud.pickStream(await sc.streams(track.id));
-      if (!streamUrl) throw new Error('no stream this browser can play - capture a tab instead');
+      const stream = SoundCloud.pickStream(await sc.streams(track.id));
+      if (!stream) throw new Error('SoundCloud offers no stream this page can decode for that track - capture a tab instead');
       const credit = SoundCloud.attribution(track);
-      await this.#begin(() => this.audio.playStream(streamUrl, `${credit.title} · ${credit.artist}`, credit));
-      this.streamWarned = false;
+      const status = $('#sc-status');
+      const data = await sc.fetchAudio(stream, {
+        onProgress: (done, total) => { status.textContent = `loading ${Math.round(done / total * 100)}%`; },
+      });
+      status.textContent = 'decoding';
+      await this.#begin(() => this.audio.playBuffer(data, `${credit.title} · ${credit.artist}`, credit));
+      status.textContent = `playing ${credit.title}`;
     } catch (err) {
+      $('#sc-status').textContent = err.message || String(err);
       this.#toast(err.message || String(err));
     } finally {
       btn.classList.remove('loading');
       btn.disabled = !sc.connected;
     }
+  }
+
+  /** For a track SoundCloud will not stream here: a button that opens it
+   *  in SoundCloud's own player and then captures that tab. */
+  #offerCapture(track) {
+    const btn = $('#sc-capture');
+    btn.hidden = false;
+    btn.onclick = () => {
+      window.open(track.permalink_url, '_blank', 'noopener');
+      // The picker needs the gesture; the new tab is what to pick.
+      this.#begin(() => this.audio.captureTab());
+    };
   }
 
   /** Finishes a sign-in on the way back from SoundCloud, if this is one.
@@ -1241,10 +1262,6 @@ class App {
   #updateHud() {
     if (!this.started) return;
     const a = this.audio;
-    if (a.mode === 'stream' && a.streamSilent && !this.streamWarned) {
-      this.streamWarned = true;
-      this.#toast("this stream plays but cannot be analysed in the browser - use 'capture a tab' instead");
-    }
     if (a.seekable && a.duration > 0) {
       const f = a.currentTime / a.duration;
       $('#progress-fill').style.transform = `scaleX(${f})`;

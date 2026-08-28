@@ -139,17 +139,7 @@ export class AudioEngine {
       this.source.disconnect();
       this.source = null;
     }
-    if (this.element) {
-      this.element.pause();
-      this.element.removeAttribute('src');
-      this.element.load();
-      this.elementSource?.disconnect();
-      this.element = null;
-      this.elementSource = null;
-      this.streamMeta = null;
-    }
-    this.streamSilent = false;
-    this.silentFor = 0;
+    this.streamMeta = null;
     if (this.ambient) { this.ambient.stop(); this.ambient = null; }
     if (this.micStream) {
       this.micStream.getTracks().forEach((t) => t.stop());
@@ -194,51 +184,13 @@ export class AudioEngine {
     this.playing = true;
   }
 
-  /**
-   * Plays a stream by URL through a media element - a SoundCloud track's
-   * transcoded audio - into the analysis bus. The element asks for CORS,
-   * since a cross-origin stream without it plays but reads as silence to
-   * the analysers; `analyse` watches for that and flags `streamSilent`.
-   */
-  async playStream(url, name, meta = null) {
+  /** Plays audio already fetched - a SoundCloud track's joined segments -
+   *  through the file path, with the credit the terms ask for. */
+  async playBuffer(data, name, meta = null) {
     await this.ensureContext();
     this.#stopSource();
-    const el = new Audio();
-    el.crossOrigin = 'anonymous';
-    el.preload = 'auto';
-    el.src = url;
-    this.element = el;
-    this.elementSource = this.ctx.createMediaElementSource(el);
-    this.elementSource.connect(this.master);
-    this.duration = 0;
-    el.addEventListener('durationchange', () => { if (Number.isFinite(el.duration)) this.duration = el.duration; });
-    el.addEventListener('ended', () => { this.playing = false; });
-    try {
-      await new Promise((resolve, reject) => {
-        const fail = () => {
-          const code = el.error?.code;
-          const foreign = new URL(url, location.href).origin !== location.origin;
-          // A cross-origin stream served without CORS is refused by the
-          // element in anonymous mode, which is the honest outcome: it
-          // could play, but the analysers would read nothing.
-          const why = code === 4 && foreign
-            ? "this stream cannot be read for analysis in the browser - it is served without CORS - so use 'capture a tab' instead"
-            : code === 2 ? 'a network error' : code === 3 ? 'the audio could not be decoded' : code === 4 ? 'the stream is not supported here' : 'it could not be loaded';
-          reject(new Error(code === 4 && foreign ? why : `the stream would not play: ${why}`));
-        };
-        el.addEventListener('error', fail, { once: true });
-        el.play().then(resolve, (err) => reject(new Error(err?.message || 'the stream would not play')));
-      });
-    } catch (err) {
-      this.#stopSource();
-      this.mode = 'none';
-      throw err;
-    }
-    this.mode = 'stream';
-    this.trackName = name;
+    await this.#useBuffer(data, name);
     this.streamMeta = meta;
-    this.playing = true;
-    this.music?.setLive(false);
   }
 
   /**
@@ -354,33 +306,21 @@ export class AudioEngine {
 
   togglePlay() {
     if (!this.ctx) return;
-    if (this.ctx.state === 'running') {
-      this.ctx.suspend();
-      this.element?.pause();
-      this.playing = false;
-    } else {
-      this.ctx.resume();
-      this.element?.play().catch(() => {});
-      this.playing = true;
-    }
+    if (this.ctx.state === 'running') { this.ctx.suspend(); this.playing = false; }
+    else { this.ctx.resume(); this.playing = true; }
   }
 
   get currentTime() {
-    if (this.mode === 'stream') return this.element?.currentTime ?? 0;
     if (this.mode !== 'file' || !this.buffer) return 0;
     return (this.offset + (this.ctx.currentTime - this.startedAt)) % this.buffer.duration;
   }
 
   /** Whether the source has a timeline to show and seek. */
   get seekable() {
-    return (this.mode === 'file' && Boolean(this.buffer)) || (this.mode === 'stream' && this.duration > 0);
+    return this.mode === 'file' && Boolean(this.buffer);
   }
 
   seek(fraction) {
-    if (this.mode === 'stream') {
-      if (this.element && this.duration > 0) this.element.currentTime = Math.max(0, Math.min(0.999, fraction)) * this.duration;
-      return;
-    }
     if (this.mode !== 'file' || !this.buffer) return;
     const t = Math.max(0, Math.min(0.999, fraction)) * this.buffer.duration;
     try { this.source.stop(); } catch { /* noop */ }
@@ -398,12 +338,6 @@ export class AudioEngine {
 
     this.analyser.getByteFrequencyData(this.freqData);
     const data = this.freqData;
-    if (this.mode === 'stream' && this.element && !this.element.paused && this.element.currentTime > 1.0) {
-      let peak = 0;
-      for (let i = 0; i < data.length; i += 8) if (data[i] > peak) peak = data[i];
-      this.silentFor = peak === 0 ? this.silentFor + dt : 0;
-      this.streamSilent = this.silentFor > 2.5;
-    }
 
     let flux = 0;
     for (let k = 0; k < BINS; k++) {

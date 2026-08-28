@@ -14,10 +14,11 @@
  * your own machine lets the page call SoundCloud directly.
  *
  * With a token, a SoundCloud URL resolves to a track, and a playable track's
- * `/streams` gives a URL for its transcoded audio. Whether that URL can be
- * analysed - not just played - depends on the media CDN sending CORS headers;
- * `audio.js` detects a stream that plays but reads as silence and the app
- * offers tab capture instead.
+ * `/streams` gives stream endpoints on the API - which need the token, so a
+ * media element cannot fetch them - that redirect to a signed HLS playlist
+ * on SoundCloud's CDN. The CDN allows cross-origin reads, so the page
+ * fetches the playlist and its MP3 segments itself, joins them, and decodes
+ * the whole track through the same path as a dropped file.
  *
  * SoundCloud's terms require attribution for playback in a custom player:
  * the uploader, SoundCloud as the source, and a link to the track's page.
@@ -115,19 +116,61 @@ export class SoundCloud {
     return this.#get(`/tracks/${id}/streams`);
   }
 
-  /** The signed-in user, for the panel. */
+  /** The signed-in user, for the panel. A token without a user behind it
+   *  has no answer here; that is not a reason to sign out. */
   async me() {
-    return this.#get('/me');
+    return this.#get('/me', {}, { keepOn401: true });
   }
 
-  /** Picks the stream the browser can play: progressive MP3 first, else an
-   *  HLS playlist where the element supports it. */
+  /** The stream to fetch: HLS in MP3 segments, which decode as one file
+   *  once joined; else progressive MP3; else nothing usable. */
   static pickStream(streams) {
     if (!streams) return null;
-    if (streams.http_mp3_128_url) return streams.http_mp3_128_url;
-    const canHls = document.createElement('audio').canPlayType('application/vnd.apple.mpegurl') !== '';
-    if (canHls) return streams.hls_aac_160_url || streams.hls_mp3_128_url || streams.hls_aac_96_url || null;
+    if (streams.hls_mp3_128_url) return { url: streams.hls_mp3_128_url, kind: 'hls' };
+    if (streams.http_mp3_128_url) return { url: streams.http_mp3_128_url, kind: 'progressive' };
     return null;
+  }
+
+  /**
+   * Downloads a track's audio as one MP3 buffer: for HLS, the playlist and
+   * every segment, six at a time; for a progressive stream, the file.
+   * `onProgress(done, total)` reports segments. Long tracks are refused
+   * before download - decoded, an hour of stereo is over a gigabyte.
+   */
+  async fetchAudio(stream, { maxSeconds = 25 * 60, onProgress = () => {} } = {}) {
+    const token = await this.#token();
+    const auth = { Authorization: `OAuth ${token}` };
+    if (stream.kind === 'progressive') {
+      const res = await fetch(stream.url, { headers: auth });
+      if (!res.ok) throw new Error(`SoundCloud would not serve the stream (${res.status})`);
+      onProgress(1, 1);
+      return res.arrayBuffer();
+    }
+    const res = await fetch(stream.url, { headers: auth });
+    if (!res.ok) throw new Error(`SoundCloud would not serve the stream (${res.status})`);
+    const playlist = parsePlaylist(await res.text(), res.url);
+    if (!playlist.segments.length) throw new Error('the stream has no segments');
+    if (playlist.duration > maxSeconds) {
+      throw new Error(`that is ${Math.round(playlist.duration / 60)} minutes long - too much to hold decoded; capture a tab for long mixes`);
+    }
+    const parts = new Array(playlist.segments.length);
+    let next = 0;
+    let done = 0;
+    const worker = async () => {
+      while (next < playlist.segments.length) {
+        const i = next++;
+        const seg = await fetch(playlist.segments[i].url);
+        if (!seg.ok) throw new Error(`a segment of the stream failed (${seg.status})`);
+        parts[i] = new Uint8Array(await seg.arrayBuffer());
+        onProgress(++done, playlist.segments.length);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, playlist.segments.length) }, worker));
+    const total = parts.reduce((n, part) => n + part.byteLength, 0);
+    const joined = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) { joined.set(part, offset); offset += part.byteLength; }
+    return joined.buffer;
   }
 
   /** What the terms ask a custom player to show. */
@@ -141,14 +184,18 @@ export class SoundCloud {
     };
   }
 
-  async #get(path, params = {}) {
+  async #get(path, params = {}, { keepOn401 = false } = {}) {
     const token = await this.#token();
     const url = new URL(API + path);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     const res = await fetch(url, {
       headers: { Accept: 'application/json; charset=utf-8', Authorization: `OAuth ${token}` },
     });
-    if (res.status === 401) { this.disconnect(); throw new Error('SoundCloud signed you out - connect again'); }
+    if (res.status === 401) {
+      if (keepOn401) throw new Error('SoundCloud did not say who you are');
+      this.disconnect();
+      throw new Error('SoundCloud signed you out - connect again');
+    }
     if (res.status === 429) throw new Error('SoundCloud is rate limiting - try again in a minute');
     if (!res.ok) throw new Error(`SoundCloud answered ${res.status}`);
     return res.json();
@@ -202,6 +249,26 @@ export class SoundCloud {
     };
     try { localStorage.setItem(TOKENS, JSON.stringify(this.tokens)); } catch { /* not available */ }
   }
+}
+
+/** An HLS media playlist: segment URLs (resolved against the playlist's)
+ *  and durations. */
+export function parsePlaylist(text, baseUrl) {
+  const segments = [];
+  let duration = 0;
+  let pending = 0;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('#EXTINF:')) {
+      pending = parseFloat(line.slice(8)) || 0;
+    } else if (!line.startsWith('#')) {
+      segments.push({ url: new URL(line, baseUrl).href, duration: pending });
+      duration += pending;
+      pending = 0;
+    }
+  }
+  return { segments, duration };
 }
 
 // -- PKCE ---------------------------------------------------------------------
