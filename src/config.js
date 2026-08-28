@@ -16,7 +16,7 @@ export const SOUNDCLOUD = {
   // page calls SoundCloud directly, which works only with a secret in
   // localStorage under `murmuration.soundcloud.clientSecret` - for a local
   // test on your own machine, never for a deployed page.
-  tokenProxy: '',
+  tokenProxy: 'https://murmuration-soundcloud.murmuration-soundcloud.workers.dev/',
   // The page's own URL, as a directory: the same string whether it was
   // opened as `/` or `/index.html`. It must match the app's registered
   // redirect URI character for character - scheme and trailing slash
