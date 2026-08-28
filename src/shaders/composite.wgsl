@@ -34,7 +34,14 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   // The flight keeps its optics still: no beat warp, no beat aberration, a
   // shallow vignette and only a trace of the anamorphic streak. Every one of
   // those would turn an open field of lights back into a corridor.
+  // The grade, by mode. Everything past the particles is stiller: no beat
+  // warp, a trace of aberration, a shallow round vignette; the sculpture
+  // stiller yet, with no streak and no aberration; and the plate - sand on
+  // slate - is graded as an object, not light: no streak, no aberration,
+  // no lift of saturation.
   let voy = clamp(U.mode, 0.0, 1.0);
+  let cur = clamp(U.mode - 1.0, 0.0, 1.0);
+  let still = clamp(U.mode - 2.0, 0.0, 1.0);
 
   // Expanding ring displacement fired on each detected beat.
   let ringR = U.beatAge * 0.9;
@@ -54,7 +61,7 @@ fn fs(in : FullOut) -> @location(0) vec4f {
 
   // Radial chromatic aberration, stronger at the edges and on transients.
   let ca = (0.0007 + U.beat * exp(-U.beatAge * 6.0) * 0.0026 * (1.0 - voy) + U.level * 0.0006)
-           * (0.20 + rn * rn * 1.2) * mix(1.0, 0.2, voy);
+           * (0.20 + rn * rn * 1.2) * mix(1.0, 0.2, voy) * (1.0 - cur);
   let off = dir * ca / vec2f(U.aspect, 1.0);
 
   var base : vec3f;
@@ -70,7 +77,7 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   let sty = styleAt(U.style);
   let bloomGain = U.bloomStrength * sty.bloom * mix(1.0, mix(0.72, 0.86, voy), U.lull)
                   * (1.0 + U.entry * 0.30 + U.onset * 0.06);
-  var col = base + bl * bloomGain + st * bloomGain * mix(0.55, 0.08, voy);
+  var col = base + bl * bloomGain + st * bloomGain * mix(0.55, 0.08, voy) * (1.0 - cur);
 
   // A faint local afterglow makes painted interaction read in the final grade.
   let pointerUv = vec2f(0.5 + U.pointer.x / (2.0 * U.aspect), 0.5 - U.pointer.y * 0.5);
@@ -86,7 +93,7 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   let shadow = mix(vec3f(0.88, 0.96, 1.06), palette(0.20, U.mood) + 0.78, 0.16);
   let highl  = mix(vec3f(1.04, 1.00, 0.94), palette(0.82, U.mood) + 0.70, 0.10);
   col *= mix(shadow, highl, smoothstep(0.10, 0.72, l));
-  col = mix(vec3f(l), col, mix(1.10, 1.02, voy));
+  col = mix(vec3f(l), col, mix(mix(1.10, mix(1.02, 1.03, cur), voy), 1.0, still));
   // Style contrast, pivoted at mid grey so it darkens shadows rather than
   // simply gaining the whole frame.
   col = clamp((col - 0.18) * sty.contrast + 0.18, vec3f(0.0), vec3f(1.0));
@@ -95,7 +102,7 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   // one halves the sides of a wide frame, which reads as a corridor.
   let rs = length((uv - 0.5) * 2.0) * 0.7071;
   let vignette = mix(mix(1.0, 0.18, smoothstep(0.30, 1.0, rn)),
-                     1.0 - 0.16 * smoothstep(0.45, 1.0, rs), voy);
+                     1.0 - mix(mix(0.16, 0.12, cur), 0.10, still) * smoothstep(0.45, 1.0, rs), voy);
   col *= vignette;
 
   // Animated grain, slightly heavier in the shadows where banding shows.

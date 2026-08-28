@@ -47,7 +47,7 @@ Then pick a source:
 | `F` | fullscreen |
 | `R` | reseed the particle field |
 | `M` | switch to microphone |
-| `B` | cycle render mode: particle / voyage |
+| `B` | cycle render mode - only with `?modes=all`, which brings the experimental voyage, current and plate back into the cycle |
 | `V` | cycle visual style within particle mode (`shift+V` goes back) |
 | `-` `=` | audio sensitivity, `\` resets it to 1.0x |
 | `G` | step through the flow behaviours (`shift+G` returns to automatic) |
@@ -85,8 +85,10 @@ Both sprite footprint and alpha are normalised against particle count - footprin
 
 ### Modes
 
-Two rendering approaches, cycled with `B`. The piece always opens on the particles.
-They are different algorithms, not different settings.
+Only the particles are in the cycle.
+The voyage, the current and the plate below are kept in the code to be worked on, and `?modes=all` brings them back under `B`.
+
+Four rendering approaches, different algorithms rather than different settings; with `?modes=all` they are cycled with `B`, and the piece always opens on the particles.
 
 **particle** is the simulation described above: a compute pass integrating ~620k grains through a flow field, drawn as additive sprites.
 Its five styles are below.
@@ -122,12 +124,66 @@ Speed swells with the inhale - roughly 5 to 30 units a second under music - and 
 Each inhale also picks a direction - the way the melody has been leaning, by relative pitch; failing that, back toward the middle; failing that, the other way from last time - and the camera sweeps into a turn of five to eight seconds, banking in proportion to how fast it is turning, then a spring eases the gaze home.
 What is driven is the turn *rate*, never the heading, on a sine window with its acceleration capped, so a sweep begins and ends at rest the way a real one does.
 Driving the turn for as long as the swell lasted was tried first and parked the heading against its limit through a whole rising passage.
+Voyage costs 2.3 ms at 2400x1500 in headless Chrome, against 19.2 ms for the particle pass, and skips the flow, simulation and backdrop passes entirely since none of them are visible.
 The trail is projected from the previous camera pose with the turn rewound as well as the travel, so trails slant and arc through a bend.
 Underneath, the path itself bends on curves so wide that the heading turns under a degree a second at full speed, and the camera looks down the road - at a point about a second ahead - rather than along the instantaneous tangent.
-Each population listens to its own register, so the arrangement is legible in the picture: the bass lives in the big warm lights, the melody in the lanterns, the hats in the dust, each through a slower envelope than the analyser's own - at the analyser's attack the lights looked nervous rather than lit.
-The beat lands on the lights rather than the camera, as a brief swell the heroes carry most; onsets catch the nearest lanterns, an instrument's entry lifts the whole field, a busy passage fills in the dust and a lull thins it to almost nothing, the heroes breathe with the pulse the tempo tracker has locked to, and a sung phrase gathers the cool lanterns onto one hue.
 
-Voyage costs about a third of the particle pass at the same resolution (6.9 ms against 19.2 ms at 2400x1500 in headless Chrome), and skips the flow, simulation and backdrop passes entirely since none of them are visible.
+**current** is a fluid cosmic wave, made of strands, flown through.
+A sheet of silk runs along the flight path without end.
+Every eighty-odd units it rolls closed around the path - a full turn and a third, its radius tightening inward so the roll spirals into a hollow - and the hollow sits on the flight line, so the camera approaches it as a dark mouth ahead, passes through the roll with the strands wrapping past, and comes out to the next.
+Between rolls the sheet unrolls into a broad sweep that peels aside and flows past; a wider, dimmer echo of it runs far to one side, its rolls out of phase, for parallax, and a veil further out appears only when the music is full.
+The sheet is drawn not as a surface but as its strands: a few hundred fine filaments, each at a fixed position across the sheet and following it along its whole length, banded and gapped like the rings of Saturn.
+Where the sheet turns edge-on the strands pile up on screen and the light gathers on the fold; where it faces the eye it is a striated silk.
+Light lives in the contours.
+
+![the current](docs/current.jpg)
+
+Everything is periodic in the path, on integer harmonics of the flight's period, so the travel never wraps visibly: the rolls sit at stations along it, each its own by a hash of its index - shifted by up to a third of the spacing, reaching seven to twelve units, turning one way or the other, its centre a unit off the line, one in seven left out - the sheet's spine turns slowly about the path and snakes, and the cross-section's twist and the rings repeat with the period.
+The form also evolves on slow clocks of its own - the wrap, the radius, the roll stations and the gaps all drift over forty seconds to three minutes - a little faster when the music is full.
+Through a roll the strands twist helically, so seen from inside they curve around the tube instead of running straight down it and converging into a corridor; between rolls the sheet snakes enough that its strands bend on screen.
+Each strand is a line, a gaussian sigma wide on screen with a halo, extruded by the world width that projects to that along a world-space perpendicular - the cross of the strand's tangent and the eye ray, continuous along the strand - with true clip depth throughout, sampled from a little behind the camera to two hundred units ahead with the samples crowding toward it; tangents are taken over a fixed baseline, since near the camera the samples are inside float precision at path coordinates in the thousands.
+The halo about each strand widens with the projected spacing of the strands and carries more light, so the sheet is a luminous surface whose body keeps its brightness as it comes close, while the line itself keeps the striation; along a limb, where the sheet turns edge-on and its strands stack, the ring pattern and every per-strand variation flatten so the limb reads as one line rather than a row of beads.
+The strands accumulate radiance and thickness in a target of their own, and a resolve folds them into the scene as silk: where they pile up the light saturates toward the strands' own colour instead of summing on toward white.
+The far wall of a roll, the side of the spine away from the eye, is dimmer: silk seen through silk.
+Cobalt at the outer lip, through blue to a dusty violet inward; peach and coral only on the middle of the rolled sheet, cooling toward the inner lip, and mostly on its underside, more of it and further across the sheet as the music warms.
+
+The camera is the flight's: the path, the breathing speed and the sine-window gaze sweeps of the voyage, banking into the bends by the lateral acceleration they earn, all through critically damped springs.
+It flies slower here - a pass through a roll should take a breath, not a blink - at four to twenty-two units a second on the phrase, never below a walking pace in a lull, the speed following its target through a critically damped spring so its accelerations are continuous; the gaze sweeps are gentler than the voyage's, since the sheet brings the motion.
+Each roll station closes as much as the music is full: its closure follows the phrase through a spring while the station is still distant and freezes thirty units before the encounter, so a quiet passage flies beside open sweeps, a rising one rolls the sheet shut around the path, and the roll ahead still answers the music you are hearing rather than a phrase that ended half a minute before.
+
+The music is the flight and the light.
+Each band's envelope is normalised adaptively, placed between a floor that falls quickly and rises slowly and a ceiling that rises at once and decays over a quarter of a minute, so a quiet record moves the form as much as a loud one; silence is gated on absolute level.
+The speed follows the phrase; the light fills with the phrase; the bass is the form's breath alone, slowly, in the rolls' depth and radius; the light flowing along the strands runs toward the lens in the camera's own coordinate - one wave per beat while the tempo is trusted, else at the mids' pace - whatever the speed, since measured along the path it was carried by the flight and stalled or raced with it; the mids fill in the faint strands and launch pulses that run away down the sheet from the camera as light and a bulge - a beat sends one when the tempo is trusted, else an onset or a rising mid does, two at a time and only ever into a slot whose pulse has faded, and an instrument's entrance a broader, quicker one; the highs bring up the fine ripple and glints on the contours; the phrase's energy fills in the faint strands, brightens the echo and warms the inner curl, further across the sheet the fuller the music; the voice warms it further; a lull dims and opens the form.
+
+The current costs about 4.0 ms at 2400x1500 in headless Chrome, and holds 60 fps at the lavish preset.
+
+**plate** is sand on a vibrating plate, seen from above.
+The plate rings in a superposition of its modes, chosen by the music: the strongest few spectral peaks each pick one of thirty-six modes of the plate by pitch, two semitones apart, and set its amplitude by their energy, so the nodal lines lean with every note; a mode that gives way to another fades over a second while the new one rises, so the figure crossfades rather than snaps, and the pairing of each mode's two shapes follows the mode, so the same chord always draws the same figure; and the grains slide down the gradient of the vibration's energy - the square of the summed mode shapes - while being shaken in proportion to the vibration where they stand, so they gather on the nodal lines.
+A figure forms while a chord holds, crisp in a lull, and dissolves and reforms when the harmony moves; the bass is a tremor in the sand and a breath in the light; a beat throws the sand up - every grain larger for an instant and lifted off its shadow toward the light - and it settles again.
+Matte grains on a bevelled slate under a raking light from the upper left: a density map of the sand, built each frame from the grains and normalised by its expected mean so the look does not depend on the preset, lights the ridges on one side, shadows the plate beside them and brightens the sand where it piles above the mean; a faint sheen of the plate's own vibration on the slate lets the harmony register the instant it changes, while the sand takes its seconds to follow.
+
+![the plate](docs/plate.jpg)
+
+The peaks are the strongest three of the smoothed bins between the low strings and the top of the voice, each standing above its neighbours, with the harmonics of a stronger, lower peak folded into it; each holds a mode slot that is retaken only by a peak a third stronger for a while, and fades over a couple of seconds when its peak has gone, so the figure never flickers between harmonics.
+Four hundred thousand grains at the full preset move in a compute pass and are drawn as grains a little over a pixel across, opaque over the slate.
+The two mode shapes of a pair are combined with a fractional weight: the exact antisymmetric pairing put a dead-straight diagonal node across the plate.
+The plate costs about 7.6 ms at 2400x1500 with its density map, and holds 60 fps at the lavish preset.
+
+### Sources
+
+The intro offers the flagship track, the generative nocturne, a file (or a drop anywhere), a SoundCloud link, another tab's audio, and a microphone or loopback device.
+Every source lands on the same analysis bus; nothing downstream of it reaches the speakers except what is meant to.
+While the music plays the page holds a screen wake lock, the way a video does, so the machine does not sleep mid-song; it is released on pause, and taken again when a hidden tab comes back - on https or localhost, where the browser allows it.
+
+**SoundCloud.** Playing a SoundCloud link needs an app registered at developers.soundcloud.com - an Artist Pro account is required to register one - with this page's URL among its redirect URIs; its client id goes in `src/config.js` (or in localStorage under `murmuration.soundcloud.clientId`).
+The client id is public by design: sign-in is OAuth 2.1 with PKCE against `secure.soundcloud.com`, and no secret ever reaches the browser; tokens live in localStorage, access tokens last about an hour, refresh tokens are single use and every refresh stores the new pair.
+With a token a link resolves to a track, a playable track's `/streams` gives the URL of its transcoded audio, and a media element plays it into the bus - asking for CORS, because without it a cross-origin stream could play but would read as silence to the analysers, and in anonymous mode the element refuses such a stream outright.
+Whether SoundCloud's media CDN sends those headers is not something the terms promise; a refused stream is reported in a sentence that points at tab capture, and a stream that somehow plays in silence is caught the same way.
+Tracks whose `access` is `preview` or `blocked` are refused with a word; the HUD credits the uploader with a link to the track on SoundCloud, as the terms ask of a custom player.
+
+**Capture a tab.** The screen-share picker, with "share tab audio" ticked, reads whatever another tab is playing - SoundCloud in its own player, or anything else - through the live-input path with its slow automatic gain; the video track is stopped at once.
+It needs no account and no key, and it is the way to play SoundCloud that the terms cannot object to.
+Chrome only, as of this writing.
 
 ### Styles
 

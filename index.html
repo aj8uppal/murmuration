@@ -32,7 +32,20 @@
       <button id="btn-song" class="primary"><span>play the track</span></button>
       <button id="btn-ambient">the nocturne</button>
       <button id="btn-file">choose a track</button>
+      <button id="btn-soundcloud">soundcloud</button>
+      <button id="btn-capture">capture a tab</button>
       <button id="btn-mic">microphone</button>
+    </div>
+    <div id="sc-panel" hidden>
+      <div class="sc-row">
+        <input id="sc-url" type="url" placeholder="paste a SoundCloud link" spellcheck="false" autocomplete="off">
+        <button id="sc-play"><span>play</span></button>
+      </div>
+      <p class="sc-status">
+        <span id="sc-status"></span>
+        <button id="sc-connect" class="link" hidden>connect with SoundCloud</button>
+        <button id="sc-disconnect" class="link" hidden>disconnect</button>
+      </p>
     </div>
     <label id="input-picker" hidden>
       <span>input</span>
@@ -64,6 +77,7 @@
       <div class="meta">
         <span id="track-name">—</span>
         <span id="time" class="dim">0:00</span>
+        <a id="track-link" class="dim" target="_blank" rel="noopener" hidden></a>
       </div>
     </div>
 
@@ -76,7 +90,7 @@
       <span id="quality" class="pill">full</span>
       <span id="fps" class="pill dim">60 fps</span>
       <span class="keys">
-        <kbd>B</kbd> mode <kbd>V</kbd> style <kbd>-</kbd><kbd>=</kbd> sens <kbd>G</kbd> flow <kbd>H</kbd> chrome <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> quality
+        <span id="keys-mode"><kbd>B</kbd> mode</span> <kbd>V</kbd> style <kbd>-</kbd><kbd>=</kbd> sens <kbd>G</kbd> flow <kbd>H</kbd> chrome <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> quality
       </span>
     </div>
   </div>

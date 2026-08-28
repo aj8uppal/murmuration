@@ -208,6 +208,44 @@ button.primary {
 }
 #input-device:focus-visible { outline: 1px solid var(--teal); outline-offset: 2px; }
 
+/* The SoundCloud panel: a link, a play button, a line of state. */
+#sc-panel {
+  margin: 1.3rem auto 0;
+  max-width: 30rem;
+}
+#sc-panel[hidden] { display: none; }
+.sc-row { display: flex; gap: 0.5rem; }
+#sc-url {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  padding: 0.66rem 1.1rem;
+}
+#sc-url::placeholder { color: rgba(238, 243, 246, 0.34); }
+#sc-url:focus-visible { outline: 1px solid var(--teal); outline-offset: 2px; }
+.sc-status {
+  margin-top: 0.7rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.11em;
+  color: rgba(238, 243, 246, 0.42);
+}
+button.link {
+  font-size: 0.7rem;
+  letter-spacing: 0.11em;
+  color: var(--teal);
+  background: none;
+  border: none;
+  padding: 0 0.3rem;
+}
+button.link:hover { background: none; transform: none; text-decoration: underline; }
+button.link[hidden] { display: none; }
+
 .hint {
   margin-top: 2.2rem;
   font-size: 0.72rem;
@@ -271,6 +309,9 @@ body.chrome-hidden #hud.show { opacity: 0; transform: translateY(10px); }
 #transport.paused .i-pause { display: none; }
 
 .meta { display: flex; flex-direction: column; gap: 0.16rem; min-width: 0; }
+#track-link { font-size: 0.66rem; letter-spacing: 0.1em; text-decoration: none; }
+#track-link:hover { text-decoration: underline; }
+#track-link[hidden] { display: none; }
 #track-name {
   font-family: var(--serif);
   font-style: italic;

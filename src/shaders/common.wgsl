@@ -63,13 +63,22 @@ struct Uniforms {
   bandSustain0   : vec4f,
   bandSustain1   : vec2f,
   composeShape   : vec2f,   // x elongation, y its axis
-  mode           : f32,     // 0 particle, 1 voyage
+  mode           : f32,     // 0 particle, 1 voyage, 2 current, 3 plate
   voyageZ        : f32,     // distance travelled, accumulated on the CPU
   voyageZoom     : f32,     // the user's wheel zoom alone; the flight's optics are otherwise fixed
   _tail          : f32,
   voyageA        : vec4f,   // x speed, y yaw, z pitch, w roll (gaze offsets)
   voyageB        : vec4f,   // x focus distance, y aperture, z sky count, w light count
   voyageC        : vec4f,   // x yaw rate, y pitch rate, z roll rate (rad/s), w chorus 0..1
+  // The sculpture (mode 2): the music's hold on the form. Its camera is
+  // the flight's.
+  sculptA        : vec4f,   // x bass 0..1, y mid 0..1, z lull 0..1, w phrase energy 0..1 (all normalised)
+  sculptB        : vec4f,   // x flow phase, y evolution clock (s), z strands per sheet, w sheet count
+  sculptC        : vec4f,   // x pulse 1 position (path units), y its amplitude, z pulse 2 position, w its amplitude
+  sculptD        : vec4f,   // x entry pulse position, y its amplitude, z echo gain, w veil gain
+  sculptE        : vec4f,   // x intensity, y warm emphasis 0..1, z pulse 3 position, w its amplitude
+  sculptF        : vec4f,   // x shimmer 0..1 (the highs), y first roll station in view, z w its closure and the next's
+  sculptG        : vec4f,   // closures of the four stations after those, 0..1
 };
 
 struct Particle {

@@ -13,12 +13,18 @@
  */
 
 const SHADERS = [
-  'common', 'flow', 'sim', 'particles', 'background', 'blit', 'bloom', 'composite', 'voyage',
+  'common', 'flow', 'sim', 'particles', 'background', 'blit', 'bloom', 'composite',
+  'flight', 'voyage', 'current', 'plate',
 ];
+// Modules that fly: they get flight.wgsl prepended after common.wgsl.
+const FLIGHT_MODULES = new Set(['voyage', 'current']);
+// Vertices per strand in current.wgsl: (segments + 1) * 2.
+const STRAND_VERTS = 450;
 
 const SPECTRUM_BINS = 128;
+const MODE_DATA_FLOATS = 4096;
 const PARTICLE_STRIDE = 40; // bytes: pos, vel, home, seed, life, depth, band
-const UNIFORM_FLOATS = 112;
+const UNIFORM_FLOATS = 140;
 
 const U = {
   resX: 0, resY: 1, invX: 2, invY: 3,
@@ -41,7 +47,10 @@ const U = {
   composeStretch: 94, composeAngle: 95,
   mode: 96, voyageZ: 97, voyageZoom: 98,
   voyageA: 100, voyageB: 104, voyageC: 108,
+  sculpt: 112,   // seven vec4s: the sculpture's music, see common.wgsl
 };
+const SCULPT_FLOATS = 28;
+const EMPTY_SCULPT = new Float32Array(SCULPT_FLOATS);
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
@@ -200,9 +209,12 @@ export class Renderer {
 
     this.modules = {};
     const created = [];
+    const prefixLines = {};
     for (const name of SHADERS) {
-      if (name === 'common') continue;
-      const code = `${common}\n\n${src[name]}`;
+      if (name === 'common' || name === 'flight') continue;
+      const prefix = FLIGHT_MODULES.has(name) ? `${common}\n\n${src.flight}` : common;
+      prefixLines[name] = prefix.split('\n').length + 1;
+      const code = `${prefix}\n\n${src[name]}`;
       this.modules[name] = this.device.createShaderModule({ code, label: name });
       created.push(name);
     }
@@ -213,7 +225,6 @@ export class Renderer {
     // than logged. Every module is created before any of them is inspected,
     // and each check is bounded: awaiting compilation info one module at a time
     // can stall indefinitely, which trades a black screen for a stuck boot.
-    const commonLines = common.split('\n').length + 1;
     const failures = [];
     await Promise.all(created.map(async (name) => {
       const info = await Promise.race([
@@ -223,8 +234,9 @@ export class Renderer {
       if (!info) return;
       for (const m of info.messages) {
         // Report against the file the author edits, not the concatenation with
-        // common.wgsl that the device actually compiled.
-        const line = m.lineNum > commonLines ? m.lineNum - commonLines : m.lineNum;
+        // the shared preludes that the device actually compiled.
+        const skip = prefixLines[name];
+        const line = m.lineNum > skip ? m.lineNum - skip : m.lineNum;
         const where = `${name}.wgsl:${line}:${m.linePos}`;
         if (m.type === 'error') failures.push(`${where} ${m.message}`);
         else console.warn(`${where} ${m.message}`);
@@ -246,6 +258,14 @@ export class Renderer {
       size: SPECTRUM_BINS * 4,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       label: 'spectrum',
+    });
+
+    // Per-mode data the CPU fills each frame - the plate's modes - read as
+    // a storage buffer.
+    this.modeDataBuffer = d.createBuffer({
+      size: MODE_DATA_FLOATS * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      label: 'mode-data',
     });
 
     this.sampler = d.createSampler({
@@ -461,7 +481,11 @@ export class Renderer {
         { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       ],
     });
+    // The flights render with a depth buffer: the voyage's near lights are
+    // tested against it so that a form in front can own a crossing.
     const voyagePl = d.createPipelineLayout({ bindGroupLayouts: [this.voyageLayout] });
+    const depthTested = { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' };
+    const depthIgnored = { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' };
     this.voyageBgPipeline = d.createRenderPipeline({
       layout: voyagePl,
       vertex: { module: this.modules.voyage, entryPoint: 'vsFull' },
@@ -471,6 +495,7 @@ export class Renderer {
         targets: [{ format: 'rgba16float' }],
       },
       primitive: { topology: 'triangle-list' },
+      depthStencil: depthIgnored,
     });
     this.voyagePipeline = d.createRenderPipeline({
       layout: voyagePl,
@@ -481,6 +506,7 @@ export class Renderer {
         targets: [{ format: 'rgba16float', blend: additive }],
       },
       primitive: { topology: 'triangle-strip' },
+      depthStencil: depthTested,
     });
     this.voyageBindGroup = d.createBindGroup({
       layout: this.voyageLayout,
@@ -488,6 +514,81 @@ export class Renderer {
         { binding: 0, resource: { buffer: this.uniformBuffer } },
         { binding: 1, resource: { buffer: this.spectrumBuffer } },
       ],
+    });
+
+    // --- the plate ----------------------------------------------------------
+    // Uniforms, the spectrum and the mode data, plus the grains.
+    this.plateSimLayout = d.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      ],
+    });
+    this.plateDrawLayout = d.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 5, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 6, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      ],
+    });
+    // The density pass reads the grains and writes the map, so it binds
+    // neither the map nor its sampler.
+    this.plateDensityLayout = d.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      ],
+    });
+    // The sand's density map: a few hundred texels across, rebuilt each frame.
+    this.densityTexture = d.createTexture({
+      size: [384, 384],
+      format: 'r16float',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      label: 'sand-density',
+    });
+    this.densityView = this.densityTexture.createView();
+    this.#createStillPipelines();
+
+    // --- current ----------------------------------------------------------
+    // The strands accumulate radiance and thickness in a target of their
+    // own, and a resolve folds them into the scene as silk over the mode's
+    // own black. A strand has no body to own a crossing with, so nothing
+    // is depth tested.
+    this.currentLayout = d.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      ],
+    });
+    const currentPl = d.createPipelineLayout({ bindGroupLayouts: [this.currentLayout] });
+    // The strands do not read their own target - the flight layout is
+    // enough, and binding the target while rendering into it is an error.
+    this.currentPipeline = d.createRenderPipeline({
+      layout: voyagePl,
+      vertex: { module: this.modules.current, entryPoint: 'vs' },
+      fragment: {
+        module: this.modules.current,
+        entryPoint: 'fs',
+        targets: [{ format: 'rgba16float', blend: additive }],
+      },
+      primitive: { topology: 'triangle-strip' },
+    });
+    this.currentResolvePipeline = d.createRenderPipeline({
+      layout: currentPl,
+      vertex: { module: this.modules.current, entryPoint: 'vsFull' },
+      fragment: {
+        module: this.modules.current,
+        entryPoint: 'resolveFs',
+        targets: [{ format: 'rgba16float' }],
+      },
+      primitive: { topology: 'triangle-list' },
+      depthStencil: depthIgnored,
     });
 
     // --- composite --------------------------------------------------------
@@ -514,6 +615,118 @@ export class Renderer {
     this.#createSimBindGroups();
   }
 
+  /** Pipelines for the still mode: the plate. */
+  #createStillPipelines() {
+    const d = this.device;
+    const over = {
+      color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    };
+    // The plate: the sand's compute step, the slate, the grains over it.
+    this.plateSimPipeline = d.createComputePipeline({
+      layout: d.createPipelineLayout({ bindGroupLayouts: [this.plateSimLayout] }),
+      compute: { module: this.modules.plate, entryPoint: 'simMain' },
+    });
+    const plateLayout = d.createPipelineLayout({ bindGroupLayouts: [this.plateDrawLayout] });
+    this.plateBgPipeline = d.createRenderPipeline({
+      layout: plateLayout,
+      vertex: { module: this.modules.plate, entryPoint: 'vsFull' },
+      fragment: { module: this.modules.plate, entryPoint: 'bgFs', targets: [{ format: 'rgba16float' }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    this.platePipeline = d.createRenderPipeline({
+      layout: plateLayout,
+      vertex: { module: this.modules.plate, entryPoint: 'vs' },
+      fragment: { module: this.modules.plate, entryPoint: 'fs', targets: [{ format: 'rgba16float', blend: over }] },
+      primitive: { topology: 'triangle-strip' },
+    });
+    this.plateDensityPipeline = d.createRenderPipeline({
+      layout: d.createPipelineLayout({ bindGroupLayouts: [this.plateDensityLayout] }),
+      vertex: { module: this.modules.plate, entryPoint: 'densityVs' },
+      fragment: {
+        module: this.modules.plate,
+        entryPoint: 'densityFs',
+        targets: [{ format: 'r16float', blend: {
+          color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+          alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+        } }],
+      },
+      primitive: { topology: 'triangle-strip' },
+    });
+  }
+
+  /** The plate's grains: a buffer of positions and velocities, seeded at
+   *  random across the plate, rebuilt when the preset changes the count. */
+  #ensureGrains(count) {
+    if (this.grainCount === count) return;
+    const d = this.device;
+    this.grainBuffer?.destroy();
+    const data = new Float32Array(count * 4);
+    for (let i = 0; i < count; i++) {
+      data[i * 4] = Math.random() * 2 - 1;
+      data[i * 4 + 1] = Math.random() * 2 - 1;
+    }
+    this.grainBuffer = d.createBuffer({
+      size: data.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      label: 'grains',
+    });
+    d.queue.writeBuffer(this.grainBuffer, 0, data);
+    this.grainCount = count;
+    const entries = [
+      { binding: 0, resource: { buffer: this.uniformBuffer } },
+      { binding: 1, resource: { buffer: this.spectrumBuffer } },
+      { binding: 2, resource: { buffer: this.modeDataBuffer } },
+      { binding: 3, resource: { buffer: this.grainBuffer } },
+    ];
+    this.plateSimBindGroup = d.createBindGroup({ layout: this.plateSimLayout, entries });
+    this.plateDrawBindGroup = d.createBindGroup({
+      layout: this.plateDrawLayout,
+      entries: [
+        ...entries.slice(0, 3),
+        { binding: 4, resource: { buffer: this.grainBuffer } },
+        { binding: 5, resource: this.densityView },
+        { binding: 6, resource: this.sampler },
+      ],
+    });
+    this.plateDensityBindGroup = d.createBindGroup({
+      layout: this.plateDensityLayout,
+      entries: [entries[0], { binding: 4, resource: { buffer: this.grainBuffer } }],
+    });
+  }
+
+  /** Passes a still mode runs before the scene pass: the plate's sand. */
+  #prepareStill(encoder, mode, state) {
+    if (mode !== 3) return;
+    const count = state.plateGrains ?? 0;
+    if (count <= 0) return;
+    this.#ensureGrains(count);
+    const pass = encoder.beginComputePass({ label: 'plate-sim' });
+    pass.setPipeline(this.plateSimPipeline);
+    pass.setBindGroup(0, this.plateSimBindGroup);
+    pass.dispatchWorkgroups(Math.ceil(count / 64));
+    pass.end();
+    // The sand's density map, for the raking light.
+    const density = encoder.beginRenderPass({
+      label: 'plate-density',
+      colorAttachments: [{ view: this.densityView, loadOp: 'clear', clearValue: { r: 0, g: 0, b: 0, a: 1 }, storeOp: 'store' }],
+    });
+    density.setPipeline(this.plateDensityPipeline);
+    density.setBindGroup(0, this.plateDensityBindGroup);
+    density.draw(4, count);
+    density.end();
+  }
+
+  /** Draws the still mode `mode` into the scene pass. */
+  #drawStill(pass, mode, state) {
+    if (mode !== 3 || !this.plateDrawBindGroup) return;
+    pass.setBindGroup(0, this.plateDrawBindGroup);
+    pass.setPipeline(this.plateBgPipeline);
+    pass.draw(3);
+    pass.setPipeline(this.platePipeline);
+    pass.draw(4, this.grainCount);
+  }
+
   resize() {
     // Capped at 3 so a phone renders natively; desktop Retina is 2 regardless.
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
@@ -535,6 +748,34 @@ export class Renderer {
       label: 'scene-hdr',
     });
     this.sceneView = this.sceneTexture.createView();
+
+    // Depth for the flights only; the particle pass has no use for it.
+    this.depthTexture?.destroy();
+    this.depthTexture = d.createTexture({
+      size: [w, h],
+      format: 'depth24plus',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      label: 'scene-depth',
+    });
+    this.depthView = this.depthTexture.createView();
+
+    // The sculpture's strands accumulate here before the resolve.
+    this.strandTexture?.destroy();
+    this.strandTexture = d.createTexture({
+      size: [w, h],
+      format: 'rgba16float',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      label: 'strands',
+    });
+    this.strandView = this.strandTexture.createView();
+    this.currentBindGroup = d.createBindGroup({
+      layout: this.currentLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer } },
+        { binding: 1, resource: { buffer: this.spectrumBuffer } },
+        { binding: 2, resource: this.strandView },
+      ],
+    });
 
     this.backgroundTexture?.destroy();
     this.backgroundWidth = Math.max(2, Math.ceil(w / 4));
@@ -623,10 +864,14 @@ export class Renderer {
         ],
       });
       const bindGroup = bindGroupFor(0.62, 0.35);
+      // The prefilter's threshold and knee, by mode: the flight halos every
+      // light; hundreds of continuous strands bloom far more readily than
+      // points, so only the folds may cross; sand on slate has no halo.
+      const first = (t, k) => (i === 0 ? bindGroupFor(t, k) : bindGroup);
       this.downPasses.push({
         target: this.mips[i].view,
         bindGroup,
-        voyageBindGroup: i === 0 ? bindGroupFor(0.34, 0.22) : bindGroup,
+        byMode: [bindGroup, first(0.34, 0.22), first(0.52, 0.16), first(1.4, 0.1)],
       });
     }
 
@@ -783,6 +1028,8 @@ export class Renderer {
     u[U.voyageC + 1] = state.voyagePitchRate ?? 0;
     u[U.voyageC + 2] = state.voyageRollRate ?? 0;
     u[U.voyageC + 3] = state.voyageSwell ?? 0;
+    u.set(state.sculpt ?? EMPTY_SCULPT, U.sculpt);
+    const strandCount = state.currentStrands ?? 0;
     u[U.composeCentreX] = state.composeCentreX ?? 0;
     u[U.composeCentreY] = state.composeCentreY ?? 0;
     u[U.composeStretch] = state.composeStretch ?? 0;
@@ -815,13 +1062,22 @@ export class Renderer {
     d.queue.writeBuffer(this.uniformBuffer, 0, u);
     d.queue.writeBuffer(this.spectrumBuffer, 0, state.spectrum);
 
-    const voyage = (state.mode ?? 0) >= 0.5;
+    // The mode, explicitly: 0 particle, 1 voyage, 2 current, 3 plate. The
+    // flights share a camera and a grade; the plate draws its own scene
+    // and skips the field entirely.
+    const mode = Math.round(state.mode ?? 0);
+    const particle = mode === 0;
+    const voyage = mode === 1;
+    const current = mode === 2;
+    const flight = voyage || current;
+    if (state.modeData) d.queue.writeBuffer(this.modeDataBuffer, 0, state.modeData);
+    if (mode === 3 && state.plateGrains) { u[U.count] = state.plateGrains; d.queue.writeBuffer(this.uniformBuffer, 0, u); }
     const encoder = d.createCommandEncoder();
     const workgroups = Math.ceil(this.particleCount / 64);
 
     // The field evolves very slowly; a 60 Hz atlas is indistinguishable on a
     // 120 Hz display and halves even this already compact noise pass.
-    if (!voyage && (this.frameIndex & 1) === 0) {
+    if (particle && (this.frameIndex & 1) === 0) {
       const pass = encoder.beginComputePass({ label: 'flow-atlas' });
       pass.setPipeline(this.flowPipeline);
       pass.setBindGroup(0, this.flowBindGroup);
@@ -829,7 +1085,7 @@ export class Renderer {
       pass.end();
     }
 
-    if (!voyage) {
+    if (particle) {
       const pass = encoder.beginComputePass({ label: 'sim' });
       pass.setBindGroup(0, this.simBindGroup);
       if (this.pendingInit) {
@@ -842,7 +1098,7 @@ export class Renderer {
       pass.end();
     }
 
-    if (!voyage) {
+    if (particle) {
       const pass = encoder.beginRenderPass({
         label: 'background-quarter',
         colorAttachments: [{
@@ -858,6 +1114,26 @@ export class Renderer {
       pass.end();
     }
 
+    if (mode >= 3) this.#prepareStill(encoder, mode, state);
+
+    if (current) {
+      const pass = encoder.beginRenderPass({
+        label: 'strands',
+        colorAttachments: [{
+          view: this.strandView,
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        }],
+      });
+      if (strandCount > 0) {
+        pass.setPipeline(this.currentPipeline);
+        pass.setBindGroup(0, this.voyageBindGroup);
+        pass.draw(STRAND_VERTS, strandCount);
+      }
+      pass.end();
+    }
+
     {
       const pass = encoder.beginRenderPass({
         label: 'scene',
@@ -867,15 +1143,28 @@ export class Renderer {
           loadOp: 'clear',
           storeOp: 'store',
         }],
+        depthStencilAttachment: flight ? {
+          view: this.depthView,
+          depthClearValue: 1,
+          depthLoadOp: 'clear',
+          depthStoreOp: 'store',
+        } : undefined,
       });
-      if (voyage) {
-        // Voyage replaces the backdrop and the particles both: a near-black
-        // sky, then every light as one instanced sprite.
+      if (current) {
+        // The sculpture: the strands resolved as silk over their own black.
+        pass.setBindGroup(0, this.currentBindGroup);
+        pass.setPipeline(this.currentResolvePipeline);
+        pass.draw(3);
+      } else if (voyage) {
+        // The flight replaces the backdrop and the particles both: a
+        // near-black sky, then the lights.
         pass.setBindGroup(0, this.voyageBindGroup);
         pass.setPipeline(this.voyageBgPipeline);
         pass.draw(3);
         pass.setPipeline(this.voyagePipeline);
         pass.draw(4, skyCount + lightCount);
+      } else if (mode >= 3) {
+        this.#drawStill(pass, mode, state);
       } else {
         pass.setPipeline(this.blitPipeline);
         pass.setBindGroup(0, this.blitBindGroup);
@@ -896,7 +1185,7 @@ export class Renderer {
         }],
       });
       pass.setPipeline(this.downPipeline);
-      pass.setBindGroup(0, voyage ? p.voyageBindGroup : p.bindGroup);
+      pass.setBindGroup(0, p.byMode[mode] ?? p.bindGroup);
       pass.draw(3);
       pass.end();
     }
