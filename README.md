@@ -48,7 +48,8 @@ Then pick a source:
 | `I` | what the piece is drawing with: the GPU adapter and the render size in pixels; the same line is printed to the console at start |
 | `R` | reseed the particle field |
 | `M` | switch to microphone |
-| `B` | cycle render mode - only with `?modes=all`, which brings the experimental voyage, current and plate back into the cycle |
+| `B` | cycle render mode: the particles and the warp; `?modes=all` brings the experimental voyage, current and plate into the cycle too |
+| `shift` (held) | in the warp, the throttle: hold to burn, let go to coast |
 | `V` | cycle visual style within particle mode (`shift+V` goes back) |
 | `-` `=` | audio sensitivity, `\` resets it to 1.0x |
 | `G` | step through the flow behaviours (`shift+G` returns to automatic) |
@@ -60,6 +61,7 @@ Then pick a source:
 | drag | pull the field around; the path keeps attracting for ~10s |
 | click | shockwave |
 | shift+drag / shift+click | repel and implode instead |
+| hold | in the warp, the throttle |
 | scroll | zoom |
 
 The chrome fades on its own after a few seconds of stillness.
@@ -86,13 +88,39 @@ Both sprite footprint and alpha are normalised against particle count - footprin
 
 ### Modes
 
-Only the particles are in the cycle.
-The voyage, the current and the plate below are kept in the code to be worked on, and `?modes=all` brings them back under `B`.
+The particles and the warp are the piece, and `B` switches between them.
+The voyage, the current and the plate below are kept in the code to be worked on, and `?modes=all` brings them into the cycle too.
 
-Four rendering approaches, different algorithms rather than different settings; with `?modes=all` they are cycled with `B`, and the piece always opens on the particles.
+Five rendering approaches, different algorithms rather than different settings, and the piece always opens on the particles.
 
 **particle** is the simulation described above: a compute pass integrating ~620k grains through a flow field, drawn as additive sprites.
 Its five styles are below.
+
+**warp** is a tunnel, flown through, with the throttle in your hand.
+A lattice of light - a ring every eight units, every fourth a gate in the accent colour, and eight rails running the length of it, corkscrewing slowly - with a field of stars inside the tube and in the space beyond its walls, seen from a camera travelling down its axis toward the light at the far end.
+It is the piece's answer to the hyperspace jump: hold the pointer, or shift, and the flight burns from a cruise of a few dozen units a second to well over two hundred - the stars draw out into streaks, the frame streams toward the vanishing point, the colour splits, the image shakes, and a flash marks the jump; let go and it coasts back down.
+
+![the warp, bending into a phrase](docs/warp.jpg)
+
+![under the burn](docs/warp-burn.jpg)
+
+Nothing here is stored: every ring, rail sample and star is derived in the vertex stage from its instance index, a hash and the distance travelled, drawn into the same HDR target as the particles so the bloom and the grade are shared, and the whole mode costs about half a millisecond at 2400x1285.
+
+The tunnel is built in the camera's own frame.
+Ahead of the camera it is a circular arc, and the music sets that arc's curvature: a point at arc distance *d* sits on the arc in a frame carried along it, so while the curvature holds steady the travel is exactly what a camera following the bend would see, and when the curvature changes the road ahead visibly re-bends toward the new direction.
+That is the point - the music is seen to steer, and it steers now, rather than a bend decided at the horizon answering music from ten seconds before.
+The melody's lean bends the tunnel up and down: a line rising above where it has been sitting curves the road upward, falling curves it down.
+The phrases sweep it left and right: each inhale - the last second sitting above the last several - picks a side, the way the melody leans, else the other way from last time, and sweeps a turn over four to seven seconds on a sine window, so it begins and ends at rest.
+The curvature follows through a spring, never a heading; the camera looks into the bend the way a driver does and banks into it, so the vanishing point, and the core of light at it, move across the frame with the turn.
+A lull straightens the road, and the burn gentles the bends, or the tunnel whips.
+
+The speed is the phrase: level and density over the last second, braked almost to a stop by a lull, with a lurch on every beat that relaxes before the next.
+The rings read the spectrum around their circumference - the bass at the floor, the top of the band at the ceiling, mirrored on the two sides - so the tunnel is a spectrum seen down its own axis, its loud sides bright and thick and its quiet ones nearly gone; they breathe with the bass, and every beat shoots a ring of light down the tunnel ahead.
+The rails carry a wave of light toward the lens, one per beat while the tempo is trusted.
+The lattice spins with the mids and the speed; the stars sparkle with the highs, fill in as the music fills, and thin in a lull.
+The colour is the mood's cool bank, travelling as the harmony does, with the gates in the accent.
+
+The travel wraps every 7680 units, which the ring spacing, the stars' window and the corkscrew all divide, so the wrap is invisible and float precision holds however long the flight; the star field is spread wider and faded by depth well before the far end, since a field seen deeper than it is wide otherwise bunches into a knot at the vanishing point.
 
 **voyage** is a flight.
 A camera moves fast along a slowly curving path through a field of lights in the black, and the piece is what passes it: every light draws a trail across the frame, bright at its head and fading down its tail, short when the music rests and long when it drives, near ones sweeping by in arcs and swelling into soft discs.
@@ -273,6 +301,7 @@ src/analysis.js       key, mode, tempo, onsets, instrument entries, the breath
 src/song.js           flagship track metadata
 src/shaders/*.wgsl    common (noise, palette, tonemap) + one file per pass
 tools/bench.sh        per-preset frame cost
+tools/shot.mjs        stills from headless Chrome, for checking a mode without a screen
 ```
 
 `common.wgsl` is prepended to every other module at load time, so the uniform struct and helpers are declared once.
@@ -317,3 +346,12 @@ node tools/analyse-track.mjs audio/je-te-laisserai-des-mots.mp3
 This mirrors what the `AnalyserNode`s feed the analyser - same FFT sizes, window, dB mapping and smoothing - and prints a timeline plus a summary against the known vocal passages. It exists because the browser is the wrong place to validate this: the running ceilings need continuous playback to calibrate, so spot-probes on a freshly loaded page report whatever the last few seconds looked like, and a 165-second trace loses everything if the tab goes away. Eight seconds and repeatable beats three minutes and fragile.
 
 It reports the median raw `requestAnimationFrame` delta rather than the on-screen fps, which is a smoothed average and hides stalls. The script's header documents why it closes tabs between runs and reloads the page for each configuration - both matter more than they sound like they should.
+
+Stills of a mode can be taken without a screen, from headless Chrome driven over the DevTools protocol with nothing but node:
+
+```sh
+./serve.sh &
+SEEK=0.55 node tools/shot.mjs shots 1 "cruise:5,burn:5:1,coast:4,bend:4:0:1"
+```
+
+That plays the bundled track from just past the middle, switches to the warp, and saves a frame at cruise, under a five-second burn, after coasting, and through a forced sweep to the right, printing the warp's state and the analyser's band means with each. The warp's stills above were taken this way; its header documents two headless quirks worth knowing before extending it.

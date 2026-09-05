@@ -63,7 +63,7 @@ struct Uniforms {
   bandSustain0   : vec4f,
   bandSustain1   : vec2f,
   composeShape   : vec2f,   // x elongation, y its axis
-  mode           : f32,     // 0 particle, 1 voyage, 2 current, 3 plate
+  mode           : f32,     // 0 particle, 1 voyage, 2 current, 3 plate, 4 warp
   voyageZ        : f32,     // distance travelled, accumulated on the CPU
   voyageZoom     : f32,     // the user's wheel zoom alone; the flight's optics are otherwise fixed
   _tail          : f32,
@@ -79,6 +79,14 @@ struct Uniforms {
   sculptE        : vec4f,   // x intensity, y warm emphasis 0..1, z pulse 3 position, w its amplitude
   sculptF        : vec4f,   // x shimmer 0..1 (the highs), y first roll station in view, z w its closure and the next's
   sculptG        : vec4f,   // closures of the four stations after those, 0..1
+  // The warp (mode 4): the tunnel and the boost, filled by `#updateWarp`
+  // in main.js. warp.wgsl reads them.
+  warpA          : vec4f,   // x distance travelled, y speed (units/s), z boost 0..1, w spin (rad)
+  warpB          : vec4f,   // x y curvature vector (rad/unit; right, up), z w gaze yaw and pitch (rad)
+  warpC          : vec4f,   // x bank (rad), y flow phase (rad), z rail count, w star count
+  warpD          : vec4f,   // x pulse 1 position (travel units), y its amplitude, z w pulse 2
+  warpE          : vec4f,   // x flash 0..1, y beat kick 0..1, z energy 0..1, w warmth 0..1
+  warpF          : vec4f,   // x y vanishing point (uv), z w shake offset (uv)
 };
 
 struct Particle {

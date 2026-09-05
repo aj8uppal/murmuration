@@ -24,24 +24,25 @@ fn streak(uv : vec2f) -> vec3f {
 
 @fragment
 fn fs(in : FullOut) -> @location(0) vec4f {
-  var uv = in.uv;
+  // The grade, by mode. Everything past the particles is stiller: no beat
+  // warp, a trace of aberration, a shallow round vignette; the sculpture
+  // stiller yet, with no streak and no aberration; and the plate - sand on
+  // slate - is graded as an object, not light: no streak, no aberration,
+  // no lift of saturation. The warp is the exception that moves: its
+  // aberration, blur and shake are the speed's, not the beat's.
+  let warp = clamp(U.mode - 3.0, 0.0, 1.0);
+  let voy = clamp(U.mode, 0.0, 1.0);
+  let cur = clamp(U.mode - 1.0, 0.0, 1.0) * (1.0 - warp);
+  let still = clamp(U.mode - 2.0, 0.0, 1.0) * (1.0 - warp);
+  let boost = U.warpA.z;
+
+  // The warp shakes the whole frame at speed, before anything else.
+  var uv = in.uv + U.warpF.zw * warp;
   let centred = (uv - 0.5) * vec2f(U.aspect, 1.0);
   let rl = length(centred);
   let dir = centred / max(rl, 1e-5);
   // Normalised so the corner always sits at 1.0, whatever the window shape.
   let rn = rl / (length(vec2f(U.aspect, 1.0)) * 0.5);
-
-  // The flight keeps its optics still: no beat warp, no beat aberration, a
-  // shallow vignette and only a trace of the anamorphic streak. Every one of
-  // those would turn an open field of lights back into a corridor.
-  // The grade, by mode. Everything past the particles is stiller: no beat
-  // warp, a trace of aberration, a shallow round vignette; the sculpture
-  // stiller yet, with no streak and no aberration; and the plate - sand on
-  // slate - is graded as an object, not light: no streak, no aberration,
-  // no lift of saturation.
-  let voy = clamp(U.mode, 0.0, 1.0);
-  let cur = clamp(U.mode - 1.0, 0.0, 1.0);
-  let still = clamp(U.mode - 2.0, 0.0, 1.0);
 
   // Expanding ring displacement fired on each detected beat.
   let ringR = U.beatAge * 0.9;
@@ -59,15 +60,41 @@ fn fs(in : FullOut) -> @location(0) vec4f {
                   * U.burstStrength * exp(-U.burstAge * 2.4) * (1.0 - voy);
   uv += bdir * clickRing * 0.015 / vec2f(U.aspect, 1.0);
 
-  // Radial chromatic aberration, stronger at the edges and on transients.
-  let ca = (0.0007 + U.beat * exp(-U.beatAge * 6.0) * 0.0026 * (1.0 - voy) + U.level * 0.0006)
-           * (0.20 + rn * rn * 1.2) * mix(1.0, 0.2, voy) * (1.0 - cur);
+  // Radial chromatic aberration, stronger at the edges and on transients;
+  // in the warp, stronger with the boost and on the beat's kick.
+  let caField = (0.0007 + U.beat * exp(-U.beatAge * 6.0) * 0.0026 * (1.0 - voy) + U.level * 0.0006)
+                * (0.20 + rn * rn * 1.2) * mix(1.0, 0.2, voy) * (1.0 - cur);
+  let caWarp = (0.0006 + boost * boost * 0.0055 + U.warpE.y * 0.0008) * (0.15 + rn * rn * 1.1);
+  let ca = mix(caField, caWarp, warp);
   let off = dir * ca / vec2f(U.aspect, 1.0);
 
   var base : vec3f;
-  base.r = textureSampleLevel(scene, samp, uv + off, 0.0).r;
-  base.g = textureSampleLevel(scene, samp, uv, 0.0).g;
-  base.b = textureSampleLevel(scene, samp, uv - off, 0.0).b;
+  if (warp > 0.5) {
+    // The speed lines: a radial blur toward the tunnel's vanishing point,
+    // longer with the boost and further from the point, so the centre
+    // stays sharp and the edges stream. Each channel's taps are shifted
+    // along the same line by the aberration.
+    let v = (uv - U.warpF.xy) * vec2f(U.aspect, 1.0);
+    let vl = length(v);
+    let dv = v / max(vl, 1e-5);
+    let blurLen = (0.004 + 0.10 * boost * boost + 0.012 * U.warpE.y) * vl;
+    var acc = vec3f(0.0);
+    var wsum = 0.0;
+    for (var i = 0; i < 8; i = i + 1) {
+      let fi = f32(i) / 7.0;
+      let w = 1.0 - 0.65 * fi;
+      let p = uv - dv * (blurLen * fi) / vec2f(U.aspect, 1.0);
+      acc.r += textureSampleLevel(scene, samp, p + off, 0.0).r * w;
+      acc.g += textureSampleLevel(scene, samp, p, 0.0).g * w;
+      acc.b += textureSampleLevel(scene, samp, p - off, 0.0).b * w;
+      wsum += w;
+    }
+    base = acc / wsum;
+  } else {
+    base.r = textureSampleLevel(scene, samp, uv + off, 0.0).r;
+    base.g = textureSampleLevel(scene, samp, uv, 0.0).g;
+    base.b = textureSampleLevel(scene, samp, uv - off, 0.0).b;
+  }
 
   let bl = textureSampleLevel(bloom, samp, uv, 0.0).rgb;
   let st = streak(uv) * vec3f(0.42, 0.62, 1.0);
@@ -86,6 +113,8 @@ fn fs(in : FullOut) -> @location(0) vec4f {
          * U.interactionGlow * 0.018 * (1.0 - voy);
 
   col *= U.exposure;
+  // The jump to full warp: a flash that the tonemap turns white.
+  col += vec3f(1.0, 0.97, 0.93) * (U.warpE.x * 1.6 * warp);
   col = aces(col);
 
   // Palette-aware split tone connects the whole frame without tinting blacks.
@@ -93,16 +122,18 @@ fn fs(in : FullOut) -> @location(0) vec4f {
   let shadow = mix(vec3f(0.88, 0.96, 1.06), palette(0.20, U.mood) + 0.78, 0.16);
   let highl  = mix(vec3f(1.04, 1.00, 0.94), palette(0.82, U.mood) + 0.70, 0.10);
   col *= mix(shadow, highl, smoothstep(0.10, 0.72, l));
-  col = mix(vec3f(l), col, mix(mix(1.10, mix(1.02, 1.03, cur), voy), 1.0, still));
+  col = mix(vec3f(l), col, mix(mix(mix(1.10, mix(1.02, 1.03, cur), voy), 1.0, still), 1.08, warp));
   // Style contrast, pivoted at mid grey so it darkens shadows rather than
   // simply gaining the whole frame.
   col = clamp((col - 0.18) * sty.contrast + 0.18, vec3f(0.0), vec3f(1.0));
 
   // Vignette. The flight's is shallow and round: the deep, aspect-weighted
-  // one halves the sides of a wide frame, which reads as a corridor.
+  // one halves the sides of a wide frame, which reads as a corridor. The
+  // warp's closes in with the boost: tunnel vision.
   let rs = length((uv - 0.5) * 2.0) * 0.7071;
-  let vignette = mix(mix(1.0, 0.18, smoothstep(0.30, 1.0, rn)),
+  var vignette = mix(mix(1.0, 0.18, smoothstep(0.30, 1.0, rn)),
                      1.0 - mix(mix(0.16, 0.12, cur), 0.10, still) * smoothstep(0.45, 1.0, rs), voy);
+  vignette *= 1.0 - warp * boost * boost * 0.35 * smoothstep(0.30, 1.0, rs);
   col *= vignette;
 
   // Animated grain, slightly heavier in the shadows where banding shows.

@@ -6,11 +6,12 @@ import { SoundCloud } from './soundcloud.js';
 import { SOUNDCLOUD } from './config.js';
 
 // `lights` and `sky` are the voyage populations; sparse is the point there,
-// so lavish buys detail in the distance rather than a denser field.
+// so lavish buys detail in the distance rather than a denser field. `stars`
+// is the warp's field.
 const QUALITY = [
-  { name: 'calm',    particles: 260000, scale: 0.85, lights: 4096, sky: 384, sheets: 2, strands: 220, grains: 220000 },
-  { name: 'full',    particles: 620000, scale: 1.00, lights: 8192, sky: 768, sheets: 3, strands: 288, grains: 420000 },
-  { name: 'lavish',  particles: 1200000, scale: 1.00, lights: 12288, sky: 1152, sheets: 3, strands: 384, grains: 700000 },
+  { name: 'calm',    particles: 260000, scale: 0.85, lights: 4096, sky: 384, sheets: 2, strands: 220, grains: 220000, stars: 7000 },
+  { name: 'full',    particles: 620000, scale: 1.00, lights: 8192, sky: 768, sheets: 3, strands: 288, grains: 420000, stars: 12000 },
+  { name: 'lavish',  particles: 1200000, scale: 1.00, lights: 12288, sky: 1152, sheets: 3, strands: 384, grains: 700000, stars: 18000 },
 ];
 
 // A phone GPU will not carry the desktop particle counts, but it must still
@@ -22,9 +23,9 @@ const SMALL = Math.min(window.innerWidth, window.innerHeight) < 700;
 const HANDHELD = TOUCH && SMALL;
 
 const HANDHELD_QUALITY = [
-  { name: 'calm',   particles: 110000, scale: 1, lights: 2048, sky: 256, sheets: 2, strands: 160, grains: 120000 },
-  { name: 'full',   particles: 240000, scale: 1, lights: 4096, sky: 384, sheets: 2, strands: 200, grains: 200000 },
-  { name: 'lavish', particles: 460000, scale: 1, lights: 6144, sky: 576, sheets: 3, strands: 260, grains: 300000 },
+  { name: 'calm',   particles: 110000, scale: 1, lights: 2048, sky: 256, sheets: 2, strands: 160, grains: 120000, stars: 3000 },
+  { name: 'full',   particles: 240000, scale: 1, lights: 4096, sky: 384, sheets: 2, strands: 200, grains: 200000, stars: 5000 },
+  { name: 'lavish', particles: 460000, scale: 1, lights: 6144, sky: 576, sheets: 3, strands: 260, grains: 300000, stars: 8000 },
 ];
 const PRESETS = HANDHELD ? HANDHELD_QUALITY : QUALITY;
 
@@ -32,13 +33,15 @@ const PRESETS = HANDHELD ? HANDHELD_QUALITY : QUALITY;
 // still chooses the palette and flowMode still chooses the motion.
 const STYLES = ['nebula', 'ink', 'constellation', 'ribbon', 'etching'];
 // Modes are whole rendering approaches, not treatments. Particle is the
-// simulation; voyage is a raymarch you fly through.
-// The particles are the piece. The flights and the plate stay in the code
-// to be worked on, and come back into the cycle with `?modes=all` (or
-// `murmuration.modes` = `all` in localStorage).
-const ALL_MODES = ['particle', 'voyage', 'current', 'plate'];
+// simulation; the warp is a tunnel flown through, steered by the music.
+// Those two are the piece. The flights and the plate stay in the code to
+// be worked on, and come back into the cycle with `?modes=all` (or
+// `murmuration.modes` = `all` in localStorage). The renderer knows each
+// by its number.
+const MODE_IDS = { particle: 0, voyage: 1, current: 2, plate: 3, warp: 4 };
+const ALL_MODES = ['particle', 'warp', 'voyage', 'current', 'plate'];
 const MODES = (new URLSearchParams(location.search).get('modes') === 'all' || readText('murmuration.modes') === 'all')
-  ? ALL_MODES : ['particle'];
+  ? ALL_MODES : ['particle', 'warp'];
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -68,6 +71,23 @@ class App {
     // The mode is deliberately not remembered: the piece opens on the
     // particles, and the other modes are somewhere to go from there.
     this.modeIndex = 0;
+    this.modeId = MODE_IDS[MODES[0]];
+    // The warp's throttle: a pointer held on the canvas, or shift.
+    this.pointers = new Set();
+    this.pointerHeld = false;
+    this.shiftHeld = false;
+    // The warp: the tunnel's travel, bend and light, all eased. It begins
+    // somewhere along its period, so no two loads open on the same rings.
+    this.warp = {
+      s: Math.random() * 7680, speed: 6, boost: 0, spin: 0, flow: 0, flowRate: 3,
+      kx: 0, ky: 0, gazeYaw: 0, gazePitch: 0, roll: 0,
+      energy: 0, energySlow: 0, kick: 0, midEnv: 0, warm: 0,
+      pitchShort: 0, pitchLong: 0, steer: 0, steerAvg: 0,
+      breathArmed: true, breathT: 10, breathLen: 6, breathAmp: 0, turnDir: 1,
+      pulses: [{ pos: 0, amp: 0 }, { pos: 0, amp: 0 }], refractory: 0, onsetArmed: true,
+      flash: 0, flashArmed: true, shakeX: 0, shakeY: 0,
+    };
+    this.warpUniforms = new Float32Array(24);
     // The flight begins somewhere along its period, so no two loads open on
     // the same lights.
     this.voyage = {
@@ -434,7 +454,24 @@ class App {
       this.pointer.ty = (0.5 - (e.clientY / this.canvas.clientHeight)) * 2;
       this.#armIdleTimer();
     });
-    this.canvas.addEventListener('pointerdown', () => this.#armIdleTimer());
+    // The warp's throttle: one pointer held on the canvas. A second
+    // pointer is a pinch, not a harder press, so it lets go.
+    this.canvas.addEventListener('pointerdown', (e) => {
+      this.#armIdleTimer();
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      this.pointers.add(e.pointerId);
+      this.pointerHeld = this.pointers.size === 1;
+    });
+    const release = (e) => {
+      if (e?.pointerId != null) this.pointers.delete(e.pointerId); else this.pointers.clear();
+      this.pointerHeld = this.pointers.size === 1;
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    window.addEventListener('blur', () => { release(); this.shiftHeld = false; });
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.shiftHeld = false;
+    });
 
     // Pinch: the touch equivalent of the wheel, folded into the same target.
     let pinchStart = 0;
@@ -512,9 +549,11 @@ class App {
           this.#cycleStyle(e.shiftKey ? -1 : 1);
           break;
         case 'KeyB':
-          this.modeIndex = (this.modeIndex + 1) % MODES.length;
-          $('#mode').textContent = MODES[this.modeIndex];
-          this.#toast(MODES[this.modeIndex]);
+          this.#setMode((this.modeIndex + 1) % MODES.length);
+          break;
+        case 'ShiftLeft':
+        case 'ShiftRight':
+          this.shiftHeld = true;
           break;
         case 'Digit1': this.#setQuality(0); break;
         case 'Digit2': this.#setQuality(1); break;
@@ -522,6 +561,15 @@ class App {
         default: break;
       }
     });
+  }
+
+  #setMode(index) {
+    this.modeIndex = index;
+    const name = MODES[index];
+    this.modeId = MODE_IDS[name];
+    $('#mode').textContent = name;
+    $('#keys-warp').hidden = this.modeId !== 4;
+    this.#toast(this.modeId === 4 ? 'warp · hold to boost' : name);
   }
 
   // -------------------------------------------------------------- loop ----
@@ -551,13 +599,34 @@ class App {
     const transientSens = Math.pow(sens, 0.6);
     const spectrum = this.#scaleSpectrum(a.spectrum, sens);
     // Both flights share the camera, the grade and the slow spectrum.
-    const voyage = this.modeIndex === 1 || this.modeIndex === 2;
-    const current = this.modeIndex === 2;
-    const still = this.modeIndex >= 3;
+    const mode = this.modeId;
+    const voyage = mode === 1 || mode === 2;
+    const current = mode === 2;
+    const still = mode === 3;
+    const warp = mode === 4;
     this.#updateVoyage(dt, spectrum);
     this.#updateSculpture(dt);
-    if (this.modeIndex === 3) this.#updatePlate(dt);
+    this.#updateWarp(dt, warp);
+    if (still) this.#updatePlate(dt);
     const preset = PRESETS[this.quality];
+
+    // Exposure and bloom deliberately do NOT take the full multiplier -
+    // sensitivity should make the field move more, not glare more. The
+    // flight is graded quieter still: fixed, restrained, almost no grain.
+    // The sculpture's grade barely moves: the music travels through the
+    // form, it never flashes the frame. The warp's lifts with the boost.
+    let exposure = 1.10 + Math.min(0.34, a.level * 0.18 * sens);
+    let bloomStrength = 0.72 + Math.min(0.55, a.level * 0.34 * sens) + beatPulse * 0.19 * transientSens;
+    let grain = 0.016;
+    if (still) { exposure = 1.0; bloomStrength = 0.04; grain = 0.004; }
+    else if (current) { exposure = 1.03 + 0.05 * this.sculpt.phrase; bloomStrength = 0.26 + 0.08 * this.sculpt.phrase; grain = 0.0035; }
+    else if (voyage) { exposure = 1.04 + Math.min(0.10, a.level * 0.08); bloomStrength = Math.min(0.62, 0.44 + a.level * 0.16 + beatPulse * 0.05); grain = 0.006; }
+    else if (warp) {
+      const b = this.warp.boost;
+      exposure = 1.05 + Math.min(0.08, a.level * 0.06) + b * 0.08;
+      bloomStrength = Math.min(0.70, 0.46 + a.level * 0.14 + b * 0.10 + beatPulse * 0.04);
+      grain = 0.007;
+    }
 
     this.renderer.frame({
       time: this.time,
@@ -583,35 +652,20 @@ class App {
       pointerX: this.pointer.x,
       pointerY: this.pointer.y,
       seedTime: this.seedTime,
-      // Exposure and bloom deliberately do NOT take the full multiplier -
-      // sensitivity should make the field move more, not glare more. The
-      // flight is graded quieter still: fixed, restrained, almost no grain.
-      // The sculpture's grade barely moves: the music travels through the
-      // form, it never flashes the frame.
-      exposure: still
-        ? 1.0
-        : current
-          ? 1.03 + 0.05 * this.sculpt.phrase
-          : voyage
-            ? 1.04 + Math.min(0.10, a.level * 0.08)
-            : 1.10 + Math.min(0.34, a.level * 0.18 * sens),
-      bloomStrength: still
-        ? 0.04
-        : current
-          ? 0.26 + 0.08 * this.sculpt.phrase
-          : voyage
-            ? Math.min(0.62, 0.44 + a.level * 0.16 + beatPulse * 0.05)
-            : 0.72 + Math.min(0.55, a.level * 0.34 * sens) + beatPulse * 0.19 * transientSens,
-      grain: still ? 0.004 : current ? 0.0035 : voyage ? 0.006 : 0.016,
+      exposure,
+      bloomStrength,
+      grain,
       speedScale: Math.pow(sens, 0.8),
       sizeScale: 1,
       warmth: this.warmth,
-      mood: voyage ? this.voyage.mood : this.mood,
+      // The flights and the warp take the slow mood: a lull ending can
+      // move the fast one a sixth of a bank in a second.
+      mood: (voyage || warp) ? this.voyage.mood : this.mood,
       flowMode: this.flowMode,
       // Styles are particle treatments; the grade they carry (bloom, contrast)
       // would otherwise leak into the flight.
-      style: voyage ? 0 : this.style,
-      mode: this.modeIndex,
+      style: (voyage || warp) ? 0 : this.style,
+      mode,
       voyageZ: this.voyage.z,
       voyageZoom: this.userZoom,
       voyageSpeed: this.voyage.speed,
@@ -628,6 +682,9 @@ class App {
       voyageSky: preset.sky,
       sculpt: this.sculptUniforms,
       currentStrands: current ? preset.sheets * preset.strands : 0,
+      warp: this.warpUniforms,
+      warpStars: warp ? preset.stars : 0,
+      warpRails: warp ? 8 : 0,
       modeData: still ? this.modeData : null,
       plateGrains: still ? preset.grains : 0,
       composeCentreX: this.compose.x,
@@ -731,7 +788,6 @@ class App {
     this.styleIndex = (this.styleIndex + step + STYLES.length) % STYLES.length;
     writeStored('murmuration.style', this.styleIndex);
     $('#style').textContent = STYLES[this.styleIndex];
-    $('#mode').textContent = MODES[this.modeIndex];
     this.#toast(STYLES[this.styleIndex]);
   }
 
@@ -798,7 +854,7 @@ class App {
     // pass through one should take a breath, not a blink.
     const sens = Math.pow(this.sensitivity, 0.55);
     const brake = 1 - smoothstep01(m.lull / 0.7) * 0.9;
-    const current = this.modeIndex === 2;
+    const current = this.modeId === 2;
     // The sculpture's speed is the phrase, unmistakably: from the
     // adaptively normalised envelope through its own attack and release,
     // never below a walking pace even in a lull.
@@ -915,6 +971,162 @@ class App {
     v.focus += (focusTarget - v.focus) * tau(2.0);
     const apertureTarget = 1 + a.bass * 0.08 + m.breath * 0.08;
     v.aperture += (apertureTarget - v.aperture) * tau(0.5);
+  }
+
+  /**
+   * The warp: a tunnel flown through. The travel, the bend and the light
+   * are all the music's, and the throttle is the user's.
+   *
+   * Speed is the phrase - level and density over the last second or so -
+   * braked almost to a stop by a lull, with a lurch on every beat that
+   * relaxes before the next; the held throttle adds a burn on top that
+   * ramps over a second and coasts off over a little longer, with a flash
+   * as it reaches full. Direction is the melody's: a line rising above
+   * where it has been sitting bends the tunnel upward, falling bends it
+   * down, and each phrase's inhale sweeps it left or right - the way the
+   * melody leans, else the other way from last time - for a few seconds.
+   * What is set is the curvature ahead, through a spring, never a heading;
+   * the camera looks into the bend and banks with it. The lattice spins
+   * with the mids and the speed; the beats shoot rings of light down it.
+   */
+  #updateWarp(dt, active) {
+    const a = this.audio;
+    const m = a.music ?? EMPTY_MUSIC;
+    const w = this.warp;
+    const tau = (seconds) => 1 - Math.exp(-dt / seconds);
+    const gate = smoothstep01((a.level - 0.006) / 0.014);
+
+    // -- energy ------------------------------------------------------------------
+    const raw = clamp(a.level * 0.7 + m.density * 0.5, 0, 1.2);
+    w.energy += (raw - w.energy) * tau(1.2);
+    w.energySlow += (w.energy - w.energySlow) * tau(7);
+    const swell = clamp((w.energy - w.energySlow) * 3.4, -1, 1);
+    const midRaw = clamp((a.lowMid + a.mid) * 0.6, 0, 1.2);
+    w.midEnv += (midRaw - w.midEnv) * tau(midRaw > w.midEnv ? 0.15 : 0.6);
+    const lull = clamp(m.lull, 0, 1);
+
+    // -- the throttle ------------------------------------------------------------
+    const held = active && (this.pointerHeld || this.shiftHeld);
+    w.boost += ((held ? 1 : 0) - w.boost) * tau(held ? 0.9 : 1.3);
+    if (w.boost > 0.92 && w.flashArmed) { w.flash = 1; w.flashArmed = false; }
+    if (w.boost < 0.6) w.flashArmed = true;
+    w.flash *= Math.exp(-dt / 0.22);
+
+    // -- speed -------------------------------------------------------------------
+    // Cruise is the phrase; the burn is added, not multiplied, so a held
+    // throttle in silence is still a warp.
+    const sens = Math.pow(this.sensitivity, 0.55);
+    const brake = 1 - smoothstep01(lull / 0.7) * 0.85;
+    const cruise = clamp((10 + w.energy * 42 + swell * 8) * brake * sens, 3, 70);
+    const target = cruise + w.boost * w.boost * (110 + cruise * 2.2);
+    w.speed += (target - w.speed) * tau(target > w.speed ? 0.7 : 1.4);
+    // The beat's lurch: a fraction of the speed for a moment, relaxing
+    // before the next beat so it cannot pile up.
+    const beatNow = a.beatAge < dt * 1.5;
+    w.kick *= Math.exp(-dt / 0.3);
+    if (beatNow) w.kick = Math.max(w.kick, clamp(a.beat, 0, 1.6) * 0.7 * gate);
+    const speedNow = w.speed * (1 + 0.22 * w.kick);
+    w.s = (w.s + speedNow * dt) % 7680;
+
+    // -- direction ---------------------------------------------------------------
+    // The melody, relatively: a line above where it has been sitting.
+    if (m.pitchConfidence > 0.25 && m.pitch > 20) {
+      const lp = Math.log2(m.pitch);
+      if (w.pitchLong === 0) { w.pitchLong = lp; w.pitchShort = lp; }
+      w.pitchShort += (lp - w.pitchShort) * tau(0.35);
+      w.pitchLong += (lp - w.pitchLong) * tau(3.5);
+    }
+    const conf = m.pitchConfidence;
+    const steerTarget = clamp((w.pitchShort - w.pitchLong) / 0.5, -1, 1) * conf * conf;
+    w.steer += (steerTarget - w.steer) * tau(Math.abs(steerTarget) > Math.abs(w.steer) ? 1.2 : 2.5);
+    w.steerAvg += (w.steer - w.steerAvg) * tau(1.5);
+    // The phrases: each inhale a sweep of a few seconds, on a sine window
+    // so it begins and ends at rest, armed again once the swell has eased.
+    w.breathT += dt;
+    if (swell < 0.12 || w.breathT > w.breathLen + 5) w.breathArmed = true;
+    if (w.breathArmed && (swell > 0.25 || m.entry > 0.6) && w.breathT > w.breathLen) {
+      w.breathArmed = false;
+      w.breathT = 0;
+      w.breathAmp = 0.6 + 0.6 * clamp(Math.max(swell, m.entry), 0, 1);
+      w.breathLen = 4 + (1 - clamp(w.energy, 0, 1)) * 3;
+      if (Math.abs(w.steerAvg) > 0.12) w.turnDir = Math.sign(w.steerAvg);
+      else w.turnDir = -w.turnDir;
+    }
+    const sweep = Math.sin(Math.PI * Math.min(w.breathT / w.breathLen, 1)) * w.breathAmp;
+    // A lull straightens the road; the burn gentles the bends, or the
+    // tunnel whips.
+    const quiet = 1 - lull * 0.7;
+    const gentle = 1 - w.boost * 0.45;
+    const kxTarget = (w.turnDir * sweep * 0.0016 + w.steer * 0.0003) * quiet * gentle;
+    const kyTarget = (w.steer * 0.0013 + Math.sin(this.time * 0.11) * 0.00018) * quiet * gentle;
+    spring(w, 'kx', kxTarget, 3.0, dt);
+    spring(w, 'ky', kyTarget, 3.0, dt);
+    const kk = Math.hypot(w.kx, w.ky);
+    if (kk > 0.0021) { w.kx *= 0.0021 / kk; w.ky *= 0.0021 / kk; }
+    // The gaze looks into the bend, at a point a hundred-odd units ahead,
+    // and the pointer leans it a little.
+    const look = tunnelPoint(120, 0, 0, w.kx, w.ky);
+    const yawTarget = Math.atan2(look[0], look[2]) * 0.75 + this.pointer.x * 0.02;
+    const pitchTarget = Math.atan2(look[1], look[2]) * 0.75 + this.pointer.y * 0.015;
+    w.gazeYaw += (yawTarget - w.gazeYaw) * tau(0.6);
+    w.gazePitch += (pitchTarget - w.gazePitch) * tau(0.6);
+    // The bank leans into the horizontal bend.
+    const rollTarget = -Math.tanh(w.kx / 0.0012) * 0.30 + Math.sin(this.time * 0.05) * 0.01;
+    spring(w, 'roll', rollTarget, 2.5, dt);
+
+    // -- the lattice's clocks ----------------------------------------------------
+    w.spin = (w.spin + dt * (0.05 + speedNow * 0.0018 + w.midEnv * 0.25)) % (2 * Math.PI);
+    // Light running along the rails: one wave per beat while the tempo is
+    // trusted, else at the mids' pace.
+    const trust = m.tempoConfidence * m.tempoConfidence;
+    const flowTarget = trust > 0.45 && m.tempo > 40
+      ? (2 * Math.PI * m.tempo / 60)
+      : 2.0 + 3.0 * w.midEnv;
+    w.flowRate += (flowTarget - w.flowRate) * tau(1.0);
+    w.flow = (w.flow + dt * w.flowRate) % (2 * Math.PI);
+
+    // -- the pulses --------------------------------------------------------------
+    // A beat shoots a ring of light down the tunnel from the camera when
+    // the tempo is trusted, else an onset does; two may be in flight.
+    w.refractory = Math.max(0, w.refractory - dt);
+    if (m.onset < 0.25) w.onsetArmed = true;
+    const onsetNow = trust <= 0.45 && m.onset > 0.5 && w.onsetArmed;
+    const slot = w.pulses[0].amp <= w.pulses[1].amp ? 0 : 1;
+    if (((beatNow && trust > 0.45) || onsetNow) && w.refractory <= 0 && gate > 0.5 && w.pulses[slot].amp < 0.4) {
+      const p = w.pulses[slot];
+      p.pos = w.s + 2;
+      p.amp = 0.5 + 0.5 * clamp(Math.max(a.beat, m.onset), 0, 1);
+      w.refractory = beatNow ? 0.25 : 0.6;
+      w.onsetArmed = false;
+    }
+    for (const p of w.pulses) {
+      p.pos = (p.pos + dt * (speedNow + 320)) % 7680;
+      p.amp *= Math.exp(-dt / 0.55);
+    }
+
+    // -- the grade's inputs ------------------------------------------------------
+    const shakeAmp = Math.max(0, (w.boost - 0.72) / 0.28) * 0.004 + w.kick * 0.0012;
+    w.shakeX = (Math.random() - 0.5) * shakeAmp;
+    w.shakeY = (Math.random() - 0.5) * shakeAmp;
+    // Where the tunnel converges on screen, for the core and the speed
+    // lines: the far end of the arc, through the gaze and the bank.
+    const aspect = this.renderer.width / Math.max(this.renderer.height, 1);
+    const far = toView(tunnelPoint(340, 0, 0, w.kx, w.ky), w.gazeYaw, w.gazePitch, w.roll);
+    const proj = 2.0503 * this.userZoom / Math.max(far[2], 1e-3);
+    const vpU = clamp(0.5 + far[0] * proj / (2 * aspect), -0.5, 1.5);
+    const vpV = clamp(0.5 - far[1] * proj * 0.5, -0.5, 1.5);
+    const voice = clamp(m.voice, 0, 1) * clamp(m.voiceConfidence, 0, 1);
+    const warmTarget = clamp(voice * voice + Math.max(m.mode * m.modeConfidence, 0) * 0.5, 0, 1);
+    w.warm += (warmTarget - w.warm) * tau(2.0);
+
+    const u = this.warpUniforms;
+    u[0] = w.s; u[1] = speedNow; u[2] = w.boost; u[3] = w.spin;
+    u[4] = w.kx; u[5] = w.ky; u[6] = w.gazeYaw; u[7] = w.gazePitch;
+    u[8] = w.roll; u[9] = w.flow;
+    u[12] = w.pulses[0].pos; u[13] = w.pulses[0].amp;
+    u[14] = w.pulses[1].pos; u[15] = w.pulses[1].amp;
+    u[16] = w.flash; u[17] = w.kick; u[18] = clamp(w.energy, 0, 1); u[19] = w.warm;
+    u[20] = vpU; u[21] = vpV; u[22] = w.shakeX; u[23] = w.shakeY;
   }
 
   /**
@@ -1317,6 +1529,41 @@ function rollJitter(k) {
   const ki = ((k + 120 * 4) % 120 + 120) % 120;
   const h = pcg((Math.imul(ki, 747796405) + 19) >>> 0) / 4294967296;
   return (h - 0.5) * 0.66;
+}
+
+/**
+ * The warp's tunnel, as warp.wgsl builds it: the camera-frame position of
+ * the point at arc distance `d` ahead on the arc of curvature (kx, ky),
+ * offset across it by (lx, ly) in the frame carried along the arc.
+ */
+function tunnelPoint(d, lx, ly, kx, ky) {
+  const k = Math.hypot(kx, ky);
+  if (k < 1e-5) return [lx, ly, d];
+  const ux = kx / k;
+  const uy = ky / k;
+  const a = k * d;
+  const ca = Math.cos(a);
+  const sa = Math.sin(a);
+  // The rotation axis, perpendicular to the curvature and the travel.
+  const ax = -uy;
+  const ay = ux;
+  const along = ax * lx + ay * ly;
+  return [
+    ux * (1 - ca) / k + lx * ca + ax * along * (1 - ca),
+    uy * (1 - ca) / k + ly * ca + ay * along * (1 - ca),
+    sa / k + (ax * ly - ay * lx) * sa,
+  ];
+}
+
+/** The warp's gaze and bank, as warp.wgsl applies them. */
+function toView(p, yaw, pitch, roll) {
+  let [x, y, z] = p;
+  const cy = Math.cos(yaw); const sy = Math.sin(yaw);
+  [x, z] = [x * cy - z * sy, x * sy + z * cy];
+  const cp = Math.cos(pitch); const sp = Math.sin(pitch);
+  [y, z] = [y * cp - z * sp, y * sp + z * cp];
+  const cr = Math.cos(roll); const sr = Math.sin(roll);
+  return [x * cr - y * sr, x * sr + y * cr, z];
 }
 
 /** Eases toward a target, never moving more than `maxStep` in one call. */

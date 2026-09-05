@@ -10,21 +10,33 @@
  *   render   bloom downsample  -> mip chain (prefilter on mip 0)
  *   render   bloom upsample    -> mip chain, additive tent
  *   render   composite         -> swap chain
+ *
+ * The other modes replace the first five passes with their own: the flights
+ * (voyage, current) draw into the HDR scene through a depth buffer, the
+ * plate runs its sand's compute and density passes first, and the warp
+ * draws its tunnel - backdrop, stars, rails, rings - as additive light.
  */
 
 const SHADERS = [
   'common', 'flow', 'sim', 'particles', 'background', 'blit', 'bloom', 'composite',
-  'flight', 'voyage', 'current', 'plate',
+  'flight', 'voyage', 'current', 'plate', 'warp',
 ];
-// Modules that fly: they get flight.wgsl prepended after common.wgsl.
-const FLIGHT_MODULES = new Set(['voyage', 'current']);
+// Modules that fly: they get flight.wgsl prepended after common.wgsl. The
+// warp builds its own tunnel but borrows the flight's hashing and palette.
+const FLIGHT_MODULES = new Set(['voyage', 'current', 'warp']);
 // Vertices per strand in current.wgsl: (segments + 1) * 2.
 const STRAND_VERTS = 450;
+// The warp's lattice: vertices per ring, (SIDES + 1) * 2, and per rail,
+// (RAIL_SEGS + 1) * 2, and the rings that cover its reach, FAR / spacing
+// plus one, all from warp.wgsl.
+const RING_VERTS = 66;
+const RAIL_VERTS = 194;
+const WARP_RINGS = 52;
 
 const SPECTRUM_BINS = 128;
 const MODE_DATA_FLOATS = 4096;
 const PARTICLE_STRIDE = 40; // bytes: pos, vel, home, seed, life, depth, band
-const UNIFORM_FLOATS = 140;
+const UNIFORM_FLOATS = 164;
 
 const U = {
   resX: 0, resY: 1, invX: 2, invY: 3,
@@ -48,9 +60,13 @@ const U = {
   mode: 96, voyageZ: 97, voyageZoom: 98,
   voyageA: 100, voyageB: 104, voyageC: 108,
   sculpt: 112,   // seven vec4s: the sculpture's music, see common.wgsl
+  warp: 140,     // six vec4s: the warp's tunnel and boost, see common.wgsl
+  warpC: 148,
 };
 const SCULPT_FLOATS = 28;
 const EMPTY_SCULPT = new Float32Array(SCULPT_FLOATS);
+const WARP_FLOATS = 24;
+const EMPTY_WARP = new Float32Array(WARP_FLOATS);
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
@@ -519,6 +535,34 @@ export class Renderer {
       ],
     });
 
+    // --- warp -------------------------------------------------------------
+    // The tunnel: its backdrop, then the stars, the rails and the rings,
+    // every one of them additive light with nothing to occlude, so there
+    // is no depth. The flight's bind group serves: uniforms and spectrum.
+    const warpStrip = (vs, fs) => d.createRenderPipeline({
+      layout: voyagePl,
+      vertex: { module: this.modules.warp, entryPoint: vs },
+      fragment: {
+        module: this.modules.warp,
+        entryPoint: fs,
+        targets: [{ format: 'rgba16float', blend: additive }],
+      },
+      primitive: { topology: 'triangle-strip' },
+    });
+    this.warpBgPipeline = d.createRenderPipeline({
+      layout: voyagePl,
+      vertex: { module: this.modules.warp, entryPoint: 'vsFull' },
+      fragment: {
+        module: this.modules.warp,
+        entryPoint: 'bgFs',
+        targets: [{ format: 'rgba16float' }],
+      },
+      primitive: { topology: 'triangle-list' },
+    });
+    this.warpStarPipeline = warpStrip('starVs', 'starFs');
+    this.warpRingPipeline = warpStrip('ringVs', 'lineFs');
+    this.warpRailPipeline = warpStrip('railVs', 'lineFs');
+
     // --- the plate ----------------------------------------------------------
     // Uniforms, the spectrum and the mode data, plus the grains.
     this.plateSimLayout = d.createBindGroupLayout({
@@ -869,12 +913,13 @@ export class Renderer {
       const bindGroup = bindGroupFor(0.62, 0.35);
       // The prefilter's threshold and knee, by mode: the flight halos every
       // light; hundreds of continuous strands bloom far more readily than
-      // points, so only the folds may cross; sand on slate has no halo.
+      // points, so only the folds may cross; sand on slate has no halo;
+      // the warp's lattice halos like the flight's lights.
       const first = (t, k) => (i === 0 ? bindGroupFor(t, k) : bindGroup);
       this.downPasses.push({
         target: this.mips[i].view,
         bindGroup,
-        byMode: [bindGroup, first(0.34, 0.22), first(0.52, 0.16), first(1.4, 0.1)],
+        byMode: [bindGroup, first(0.34, 0.22), first(0.52, 0.16), first(1.4, 0.1), first(0.30, 0.22)],
       });
     }
 
@@ -1042,6 +1087,11 @@ export class Renderer {
     u[U.voyageC + 3] = state.voyageSwell ?? 0;
     u.set(state.sculpt ?? EMPTY_SCULPT, U.sculpt);
     const strandCount = state.currentStrands ?? 0;
+    u.set(state.warp ?? EMPTY_WARP, U.warp);
+    const railCount = state.warpRails ?? 0;
+    const starCount = state.warpStars ?? 0;
+    u[U.warpC + 2] = railCount;
+    u[U.warpC + 3] = starCount;
     u[U.composeCentreX] = state.composeCentreX ?? 0;
     u[U.composeCentreY] = state.composeCentreY ?? 0;
     u[U.composeStretch] = state.composeStretch ?? 0;
@@ -1074,13 +1124,15 @@ export class Renderer {
     d.queue.writeBuffer(this.uniformBuffer, 0, u);
     d.queue.writeBuffer(this.spectrumBuffer, 0, state.spectrum);
 
-    // The mode, explicitly: 0 particle, 1 voyage, 2 current, 3 plate. The
-    // flights share a camera and a grade; the plate draws its own scene
-    // and skips the field entirely.
+    // The mode, explicitly: 0 particle, 1 voyage, 2 current, 3 plate, 4
+    // warp. The flights share a camera and a grade; the plate draws its
+    // own scene and skips the field entirely; the warp draws its tunnel
+    // into the scene with no depth.
     const mode = Math.round(state.mode ?? 0);
     const particle = mode === 0;
     const voyage = mode === 1;
     const current = mode === 2;
+    const warp = mode === 4;
     const flight = voyage || current;
     if (state.modeData) d.queue.writeBuffer(this.modeDataBuffer, 0, state.modeData);
     if (mode === 3 && state.plateGrains) { u[U.count] = state.plateGrains; d.queue.writeBuffer(this.uniformBuffer, 0, u); }
@@ -1126,7 +1178,7 @@ export class Renderer {
       pass.end();
     }
 
-    if (mode >= 3) this.#prepareStill(encoder, mode, state);
+    if (mode === 3) this.#prepareStill(encoder, mode, state);
 
     if (current) {
       const pass = encoder.beginRenderPass({
@@ -1175,7 +1227,23 @@ export class Renderer {
         pass.draw(3);
         pass.setPipeline(this.voyagePipeline);
         pass.draw(4, skyCount + lightCount);
-      } else if (mode >= 3) {
+      } else if (warp) {
+        // The tunnel: the backdrop with its core, the stars, the rails,
+        // the rings.
+        pass.setBindGroup(0, this.voyageBindGroup);
+        pass.setPipeline(this.warpBgPipeline);
+        pass.draw(3);
+        if (starCount > 0) {
+          pass.setPipeline(this.warpStarPipeline);
+          pass.draw(4, starCount);
+        }
+        if (railCount > 0) {
+          pass.setPipeline(this.warpRailPipeline);
+          pass.draw(RAIL_VERTS, railCount);
+        }
+        pass.setPipeline(this.warpRingPipeline);
+        pass.draw(RING_VERTS, WARP_RINGS);
+      } else if (mode === 3) {
         this.#drawStill(pass, mode, state);
       } else {
         pass.setPipeline(this.blitPipeline);
