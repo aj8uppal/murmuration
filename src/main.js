@@ -79,7 +79,7 @@ class App {
     // The warp: the tunnel's travel, bend and light, all eased. It begins
     // somewhere along its period, so no two loads open on the same rings.
     this.warp = {
-      s: Math.random() * 7680, speed: 6, boost: 0, spin: 0, flow: 0, flowRate: 3,
+      s: Math.random() * 7680, travel: 0, speed: 6, boost: 0, spin: 0, flow: 0, flowRate: 3,
       kx: 0, ky: 0, gazeYaw: 0, gazePitch: 0, roll: 0,
       energy: 0, energySlow: 0, kick: 0, midEnv: 0, warm: 0,
       pitchShort: 0, pitchLong: 0, steer: 0, steerAvg: 0,
@@ -87,7 +87,7 @@ class App {
       pulses: [{ pos: 0, amp: 0 }, { pos: 0, amp: 0 }], refractory: 0, onsetArmed: true,
       flash: 0, flashArmed: true, shakeX: 0, shakeY: 0,
     };
-    this.warpUniforms = new Float32Array(24);
+    this.warpUniforms = new Float32Array(28);
     // The flight begins somewhere along its period, so no two loads open on
     // the same lights.
     this.voyage = {
@@ -623,8 +623,8 @@ class App {
     else if (voyage) { exposure = 1.04 + Math.min(0.10, a.level * 0.08); bloomStrength = Math.min(0.62, 0.44 + a.level * 0.16 + beatPulse * 0.05); grain = 0.006; }
     else if (warp) {
       const b = this.warp.boost;
-      exposure = 1.05 + Math.min(0.08, a.level * 0.06) + b * 0.08;
-      bloomStrength = Math.min(0.70, 0.46 + a.level * 0.14 + b * 0.10 + beatPulse * 0.04);
+      exposure = 1.05 + 0.06 * this.warp.energy + b * 0.08;
+      bloomStrength = Math.min(0.70, 0.46 + 0.12 * this.warp.energy + b * 0.10);
       grain = 0.007;
     }
 
@@ -642,9 +642,9 @@ class App {
       beat: a.beat * transientSens,
       beatAge: a.beatAge,
       flux: a.flux * sens,
-      // The flight reads a slower envelope: lights that flickered at the
-      // analyser's own attack looked nervous, not lit.
-      spectrum: voyage ? this.voyageSpectrum : spectrum,
+      // The flight and the warp read a slower envelope: lights that
+      // flickered at the analyser's own attack looked nervous, not lit.
+      spectrum: (voyage || warp) ? this.voyageSpectrum : spectrum,
       camZoom: this.cam.zoom,
       camAngle: this.cam.angle,
       camX: this.cam.x,
@@ -684,7 +684,7 @@ class App {
       currentStrands: current ? preset.sheets * preset.strands : 0,
       warp: this.warpUniforms,
       warpStars: warp ? preset.stars : 0,
-      warpRails: warp ? 8 : 0,
+      warpRails: warp ? 12 : 0,
       modeData: still ? this.modeData : null,
       plateGrains: still ? preset.grains : 0,
       composeCentreX: this.compose.x,
@@ -978,16 +978,22 @@ class App {
    * are all the music's, and the throttle is the user's.
    *
    * Speed is the phrase - level and density over the last second or so -
-   * braked almost to a stop by a lull, with a lurch on every beat that
-   * relaxes before the next; the held throttle adds a burn on top that
-   * ramps over a second and coasts off over a little longer, with a flash
-   * as it reaches full. Direction is the melody's: a line rising above
-   * where it has been sitting bends the tunnel upward, falling bends it
-   * down, and each phrase's inhale sweeps it left or right - the way the
-   * melody leans, else the other way from last time - for a few seconds.
-   * What is set is the curvature ahead, through a spring, never a heading;
-   * the camera looks into the bend and banks with it. The lattice spins
-   * with the mids and the speed; the beats shoot rings of light down it.
+   * braked almost to a stop by a lull, with a small lurch on a transient
+   * that relaxes before the next; the held throttle adds a burn on top
+   * that ramps over a second and coasts off over a little longer, with a
+   * flash as it reaches full. Direction is the melody's: a line rising
+   * above where it has been sitting bends the tunnel upward, falling bends
+   * it down, and each phrase's inhale sweeps it left or right - the way
+   * the melody leans, else the other way from last time - for a few
+   * seconds. What is set is the curvature ahead, through a spring, never a
+   * heading; the camera looks into the bend and banks with it. The lattice
+   * turns with the mids and the speed; a transient sends a faint wave of
+   * light down the tunnel.
+   *
+   * Nothing here is keyed to the tempo tracker's beat: its phase-locked
+   * pulse can sit a little off the hits, and a flash a little off the hit
+   * reads as wrong where no flash would not. The onset is the transient
+   * the analyser actually heard.
    */
   #updateWarp(dt, active) {
     const a = this.audio;
@@ -1020,13 +1026,14 @@ class App {
     const cruise = clamp((10 + w.energy * 42 + swell * 8) * brake * sens, 3, 70);
     const target = cruise + w.boost * w.boost * (110 + cruise * 2.2);
     w.speed += (target - w.speed) * tau(target > w.speed ? 0.7 : 1.4);
-    // The beat's lurch: a fraction of the speed for a moment, relaxing
-    // before the next beat so it cannot pile up.
-    const beatNow = a.beatAge < dt * 1.5;
-    w.kick *= Math.exp(-dt / 0.3);
-    if (beatNow) w.kick = Math.max(w.kick, clamp(a.beat, 0, 1.6) * 0.7 * gate);
-    const speedNow = w.speed * (1 + 0.22 * w.kick);
+    // A transient's lurch: a small fraction of the speed for a moment,
+    // relaxing before the next so it cannot pile up.
+    const onset = clamp(m.onset, 0, 1) * gate;
+    w.kick = Math.max(w.kick * Math.exp(-dt / 0.35), onset);
+    const speedNow = w.speed * (1 + 0.06 * w.kick);
     w.s = (w.s + speedNow * dt) % 7680;
+    // Unwrapped, for the haze's noise, which has no period to wrap in.
+    w.travel += speedNow * dt;
 
     // -- direction ---------------------------------------------------------------
     // The melody, relatively: a line above where it has been sitting.
@@ -1085,23 +1092,23 @@ class App {
     w.flowRate += (flowTarget - w.flowRate) * tau(1.0);
     w.flow = (w.flow + dt * w.flowRate) % (2 * Math.PI);
 
-    // -- the pulses --------------------------------------------------------------
-    // A beat shoots a ring of light down the tunnel from the camera when
-    // the tempo is trusted, else an onset does; two may be in flight.
+    // -- the waves ---------------------------------------------------------------
+    // A transient sends a broad, faint wave of light down the tunnel from
+    // the camera; two may be in flight, and a new one waits for a slot
+    // whose wave has faded.
     w.refractory = Math.max(0, w.refractory - dt);
     if (m.onset < 0.25) w.onsetArmed = true;
-    const onsetNow = trust <= 0.45 && m.onset > 0.5 && w.onsetArmed;
     const slot = w.pulses[0].amp <= w.pulses[1].amp ? 0 : 1;
-    if (((beatNow && trust > 0.45) || onsetNow) && w.refractory <= 0 && gate > 0.5 && w.pulses[slot].amp < 0.4) {
+    if (m.onset > 0.55 && w.onsetArmed && w.refractory <= 0 && gate > 0.5 && w.pulses[slot].amp < 0.2) {
       const p = w.pulses[slot];
       p.pos = w.s + 2;
-      p.amp = 0.5 + 0.5 * clamp(Math.max(a.beat, m.onset), 0, 1);
-      w.refractory = beatNow ? 0.25 : 0.6;
+      p.amp = 0.25 + 0.2 * onset;
+      w.refractory = 0.4;
       w.onsetArmed = false;
     }
     for (const p of w.pulses) {
-      p.pos = (p.pos + dt * (speedNow + 320)) % 7680;
-      p.amp *= Math.exp(-dt / 0.55);
+      p.pos = (p.pos + dt * (speedNow + 180)) % 7680;
+      p.amp *= Math.exp(-dt / 0.8);
     }
 
     // -- the grade's inputs ------------------------------------------------------
@@ -1127,6 +1134,7 @@ class App {
     u[14] = w.pulses[1].pos; u[15] = w.pulses[1].amp;
     u[16] = w.flash; u[17] = w.kick; u[18] = clamp(w.energy, 0, 1); u[19] = w.warm;
     u[20] = vpU; u[21] = vpV; u[22] = w.shakeX; u[23] = w.shakeY;
+    u[24] = w.travel;
   }
 
   /**

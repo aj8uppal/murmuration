@@ -97,14 +97,21 @@ Five rendering approaches, different algorithms rather than different settings, 
 Its five styles are below.
 
 **warp** is a tunnel, flown through, with the throttle in your hand.
-A lattice of light - a ring every eight units, every fourth a gate in the accent colour, and eight rails running the length of it, corkscrewing slowly - with a field of stars inside the tube and in the space beyond its walls, seen from a camera travelling down its axis toward the light at the far end.
+A sleeve of haze on the tunnel's walls, streaming past; hoops of mist along it at no regular interval, a quarter of them gates in the accent colour; a dozen faint threads running its length, corkscrewing slowly; and a field of stars inside the tube and in the space beyond its walls - all seen from a camera travelling down its axis toward the light at the far end.
 It is the piece's answer to the hyperspace jump: hold the pointer, or shift, and the flight burns from a cruise of a few dozen units a second to well over two hundred - the stars draw out into streaks, the frame streams toward the vanishing point, the colour splits, the image shakes, and a flash marks the jump; let go and it coasts back down.
 
 ![the warp, bending into a phrase](docs/warp.jpg)
 
 ![under the burn](docs/warp-burn.jpg)
 
-Nothing here is stored: every ring, rail sample and star is derived in the vertex stage from its instance index, a hash and the distance travelled, drawn into the same HDR target as the particles so the bloom and the grade are shared, and the whole mode costs about half a millisecond at 2400x1285.
+The haze is a fullscreen pass drawn at quarter resolution and expanded, like the particle backdrop: for each pixel the eye ray is met with the tube - solved on the bent arc by a few fixed-point steps from the straight tube's answer - and the wall there is a cloud of noise in the tunnel's own coordinates, long along the travel and narrow around it, so it streams; it is dim right beside the lens, fullest in the middle distance, and dissolves far ahead into the core.
+Nothing else is stored: every hoop, thread sample and star is derived in the vertex stage from its instance index, a hash and the distance travelled.
+All of it is drawn into the same HDR target as the particles so the bloom chain and the grade are shared, and the whole mode costs about two milliseconds at 2400x1285, most of it the haze, against the particle pass's three at the same size.
+
+The first build of this was a wireframe - a hard ring every eight units, every fourth a gate, the beat tracker's pulses shot down them - and it was intrusive in three ways worth recording.
+Evenly spaced rings passing the camera are a rhythm of their own, and one that has nothing to do with the music's; so the hoops now sit off their stations by up to forty percent, a third are missing, and each has its own brightness and size.
+A ring rushing past as a bar across the frame is the loudest thing in the picture; so the hoops dissolve before they reach the frame's edge.
+And a flash keyed to the tempo tracker's phase-locked beat lands a little off the actual hit often enough to read as wrong, where no flash at all would not; so nothing here answers the beat tracker - what is immediate answers the onset, the transient the analyser actually heard, and gently, and everything else follows the slow envelopes.
 
 The tunnel is built in the camera's own frame.
 Ahead of the camera it is a circular arc, and the music sets that arc's curvature: a point at arc distance *d* sits on the arc in a frame carried along it, so while the curvature holds steady the travel is exactly what a camera following the bend would see, and when the curvature changes the road ahead visibly re-bends toward the new direction.
@@ -114,13 +121,14 @@ The phrases sweep it left and right: each inhale - the last second sitting above
 The curvature follows through a spring, never a heading; the camera looks into the bend the way a driver does and banks into it, so the vanishing point, and the core of light at it, move across the frame with the turn.
 A lull straightens the road, and the burn gentles the bends, or the tunnel whips.
 
-The speed is the phrase: level and density over the last second, braked almost to a stop by a lull, with a lurch on every beat that relaxes before the next.
-The rings read the spectrum around their circumference - the bass at the floor, the top of the band at the ceiling, mirrored on the two sides - so the tunnel is a spectrum seen down its own axis, its loud sides bright and thick and its quiet ones nearly gone; they breathe with the bass, and every beat shoots a ring of light down the tunnel ahead.
-The rails carry a wave of light toward the lens, one per beat while the tempo is trusted.
-The lattice spins with the mids and the speed; the stars sparkle with the highs, fill in as the music fills, and thin in a lull.
-The colour is the mood's cool bank, travelling as the harmony does, with the gates in the accent.
+The speed is the phrase: level and density over the last second, braked almost to a stop by a lull, with a small lurch on a transient that relaxes before the next.
+The walls and the hoops read the spectrum around the tunnel's circumference - the bass at the floor, the top of the band at the ceiling, mirrored on the two sides, and the slow envelope rather than the analyser's own attack - so the tunnel is a spectrum seen down its own axis, softly; the walls breathe with the bass, fill with the phrase and thin in a lull; a transient brightens the nearest hoops a little and sends a broad, faint wave of light down the tunnel ahead.
+The threads carry a slow flow of light toward the lens, one wave per beat while the tempo is trusted, else at the mids' pace.
+The lattice turns with the mids and the speed, and the haze turns with it; the stars sparkle with the highs, fill in as the music fills, and thin in a lull.
+The colour is the mood's cool bank, travelling as the harmony does, with slow bands of hue along the walls and the gates in the accent.
 
-The travel wraps every 7680 units, which the ring spacing, the stars' window and the corkscrew all divide, so the wrap is invisible and float precision holds however long the flight; the star field is spread wider and faded by depth well before the far end, since a field seen deeper than it is wide otherwise bunches into a knot at the vanishing point.
+The travel wraps every 7680 units, which the hoops' stations, the stars' window and the corkscrew all divide, so the wrap is invisible and float precision holds however long the flight; the haze's noise has no period to wrap in, so it scrolls on the unwrapped distance instead, whose precision is ample for a session.
+The star field is spread wider and faded by depth well before the far end, since a field seen deeper than it is wide otherwise bunches into a knot at the vanishing point.
 
 **voyage** is a flight.
 A camera moves fast along a slowly curving path through a field of lights in the black, and the piece is what passes it: every light draws a trail across the frame, bright at its head and fading down its tail, short when the music rests and long when it drives, near ones sweeping by in arcs and swelling into soft discs.

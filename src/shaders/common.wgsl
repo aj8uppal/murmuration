@@ -87,6 +87,7 @@ struct Uniforms {
   warpD          : vec4f,   // x pulse 1 position (travel units), y its amplitude, z w pulse 2
   warpE          : vec4f,   // x flash 0..1, y beat kick 0..1, z energy 0..1, w warmth 0..1
   warpF          : vec4f,   // x y vanishing point (uv), z w shake offset (uv)
+  warpG          : vec4f,   // x travel, unwrapped, for the haze's noise; y z w spare
 };
 
 struct Particle {

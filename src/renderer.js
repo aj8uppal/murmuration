@@ -29,14 +29,14 @@ const STRAND_VERTS = 450;
 // The warp's lattice: vertices per ring, (SIDES + 1) * 2, and per rail,
 // (RAIL_SEGS + 1) * 2, and the rings that cover its reach, FAR / spacing
 // plus one, all from warp.wgsl.
-const RING_VERTS = 66;
+const RING_VERTS = 130;
 const RAIL_VERTS = 194;
-const WARP_RINGS = 52;
+const WARP_RINGS = 30;
 
 const SPECTRUM_BINS = 128;
 const MODE_DATA_FLOATS = 4096;
 const PARTICLE_STRIDE = 40; // bytes: pos, vel, home, seed, life, depth, band
-const UNIFORM_FLOATS = 164;
+const UNIFORM_FLOATS = 168;
 
 const U = {
   resX: 0, resY: 1, invX: 2, invY: 3,
@@ -65,7 +65,7 @@ const U = {
 };
 const SCULPT_FLOATS = 28;
 const EMPTY_SCULPT = new Float32Array(SCULPT_FLOATS);
-const WARP_FLOATS = 24;
+const WARP_FLOATS = 28;
 const EMPTY_WARP = new Float32Array(WARP_FLOATS);
 
 function clamp01(value) {
@@ -536,9 +536,11 @@ export class Renderer {
     });
 
     // --- warp -------------------------------------------------------------
-    // The tunnel: its backdrop, then the stars, the rails and the rings,
+    // The tunnel: the haze on its walls, drawn small like the particle
+    // backdrop and blitted up, then the stars, the rails and the rings,
     // every one of them additive light with nothing to occlude, so there
-    // is no depth. The flight's bind group serves: uniforms and spectrum.
+    // is no depth. The haze reads the spectrum in the fragment stage, so
+    // it takes the backdrop's layout; the strips take the flight's.
     const warpStrip = (vs, fs) => d.createRenderPipeline({
       layout: voyagePl,
       vertex: { module: this.modules.warp, entryPoint: vs },
@@ -549,12 +551,12 @@ export class Renderer {
       },
       primitive: { topology: 'triangle-strip' },
     });
-    this.warpBgPipeline = d.createRenderPipeline({
-      layout: voyagePl,
+    this.warpHazePipeline = d.createRenderPipeline({
+      layout: d.createPipelineLayout({ bindGroupLayouts: [this.bgLayout] }),
       vertex: { module: this.modules.warp, entryPoint: 'vsFull' },
       fragment: {
         module: this.modules.warp,
-        entryPoint: 'bgFs',
+        entryPoint: 'hazeFs',
         targets: [{ format: 'rgba16float' }],
       },
       primitive: { topology: 'triangle-list' },
@@ -1162,7 +1164,7 @@ export class Renderer {
       pass.end();
     }
 
-    if (particle) {
+    if (particle || warp) {
       const pass = encoder.beginRenderPass({
         label: 'background-quarter',
         colorAttachments: [{
@@ -1172,7 +1174,7 @@ export class Renderer {
           storeOp: 'store',
         }],
       });
-      pass.setPipeline(this.bgPipeline);
+      pass.setPipeline(warp ? this.warpHazePipeline : this.bgPipeline);
       pass.setBindGroup(0, this.bgBindGroup);
       pass.draw(3);
       pass.end();
@@ -1228,11 +1230,12 @@ export class Renderer {
         pass.setPipeline(this.voyagePipeline);
         pass.draw(4, skyCount + lightCount);
       } else if (warp) {
-        // The tunnel: the backdrop with its core, the stars, the rails,
-        // the rings.
-        pass.setBindGroup(0, this.voyageBindGroup);
-        pass.setPipeline(this.warpBgPipeline);
+        // The tunnel: the haze and the core, expanded from the small
+        // target, then the stars, the rails, the rings.
+        pass.setPipeline(this.blitPipeline);
+        pass.setBindGroup(0, this.blitBindGroup);
         pass.draw(3);
+        pass.setBindGroup(0, this.voyageBindGroup);
         if (starCount > 0) {
           pass.setPipeline(this.warpStarPipeline);
           pass.draw(4, starCount);

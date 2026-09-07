@@ -1,11 +1,17 @@
 // Warp: a tunnel flown through, driven and steered by the music.
 //
-// A lattice of light - rings every few units, rails running the length of
-// it - with a field of stars inside and beyond it, seen from a camera that
-// travels down its axis. Nothing is stored: every ring, rail sample and star
-// is derived in the vertex stage from its instance index, a hash, and the
-// distance travelled, and lands in the same HDR target as the particles so
-// the bloom chain and the grade are shared.
+// A sleeve of haze on the tunnel's walls, hoops of mist along it at no
+// regular interval, faint threads running its length, and a field of stars
+// inside and beyond it, seen from a camera that travels down its axis
+// toward the light at the far end. The haze is a fullscreen pass drawn
+// small and expanded, like the particle backdrop; every hoop, thread sample
+// and star is derived in the vertex stage from its instance index, a hash,
+// and the distance travelled. All of it lands in the same HDR target as the
+// particles so the bloom chain and the grade are shared.
+//
+// Nothing here answers the tempo tracker. What is immediate answers the
+// onset - the transient the analyser actually heard - and gently; the rest
+// follows the slow envelopes, so the piece breathes rather than blinks.
 //
 // The tunnel is built in the camera's own frame. Ahead of the camera it is a
 // circular arc whose curvature vector the CPU sets from the music - the
@@ -22,9 +28,9 @@
 
 const R : f32 = 10.0;                   // the tunnel's radius
 const FAR : f32 = 400.0;                // how far ahead it is drawn
-const RING_SPACING : f32 = 8.0;
-const RINGS_PER_PERIOD : u32 = 960u;
-const SIDES : u32 = 32u;
+const RING_SPACING : f32 = 14.0;        // on average: each hoop sits off its station by up to 40%
+const RINGS_PER_PERIOD : u32 = 549u;    // WPERIOD / RING_SPACING, rounded: hoop identity repeats with the travel
+const SIDES : u32 = 64u;
 const RAIL_SEGS : u32 = 96u;
 const WPERIOD : f32 = 7680.0;
 const STAR_WINDOW : f32 = 480.0;        // stars live in a window around the camera
@@ -77,12 +83,13 @@ fn clipAt(unit : vec2f, z : f32) -> vec4f {
   return vec4f(unit.x * z / U.aspect, unit.y * z, 0.5 * z, z);
 }
 
-/** The beat's pulses: rings of light shot down the tunnel from the camera
- *  on each beat, in travel units, wrapping with the period. */
+/** The onsets' waves: broad, faint swells of light sent down the tunnel
+ *  from the camera on a transient, in travel units, wrapping with the
+ *  period. */
 fn pulseAt(s : f32) -> f32 {
   var d1 = s - U.warpD.x;  d1 -= WPERIOD * round(d1 / WPERIOD);
   var d2 = s - U.warpD.z;  d2 -= WPERIOD * round(d2 / WPERIOD);
-  d1 /= 7.0;  d2 /= 7.0;
+  d1 /= 16.0;  d2 /= 16.0;
   return U.warpD.y * exp(-0.5 * d1 * d1) + U.warpD.w * exp(-0.5 * d2 * d2);
 }
 
@@ -108,28 +115,76 @@ fn latticeColour() -> vec3f {
   return mix(c, vec3f(0.9, 0.94, 1.0), 0.12);
 }
 
-// -- backdrop -----------------------------------------------------------------
+// -- the haze -----------------------------------------------------------------
 
-/** Black, a haze that gathers where the tunnel converges, and the core: the
- *  light at the far end that swells with the boost until it whites out. */
+/** Where the eye ray through `unit` meets the tube: its depth along the
+ *  tunnel, its angle around the tube, and its distance on screen from the
+ *  tube's axis there. Solved on the bent arc by a few fixed-point steps
+ *  from the straight tube's answer: the axis moves across the screen with
+ *  depth, slowly enough for that to settle. */
+fn wallAt(unit : vec2f) -> vec3f {
+  let proj = PROJ_W * U.voyageZoom;
+  var d = FAR * 0.8;
+  var axis = vec2f(0.0);
+  for (var i = 0; i < 4; i++) {
+    axis = projectW(toView(tunnelPoint(d, vec2f(0.0))));
+    d = clamp(R * proj / max(length(unit - axis), 1e-3), 1.0, FAR);
+  }
+  let rel = unit - axis;
+  return vec3f(d, atan2(rel.y, rel.x) - U.warpC.x, length(rel));
+}
+
+/** The walls: a sleeve of cloud in the tunnel's own coordinates - long
+ *  along the travel, narrow around it - streaming past, lit around its
+ *  circumference by the spectrum, breathing with the bass, dim right
+ *  beside the lens and dissolving far ahead into the core: the light at
+ *  the far end that swells with the burn. Drawn small and expanded. */
 @fragment
-fn bgFs(in : FullOut) -> @location(0) vec4f {
+fn hazeFs(in : FullOut) -> @location(0) vec4f {
   let unit = (in.uv - 0.5) * vec2f(2.0 * U.aspect, -2.0);
-  let vp = (U.warpF.xy - 0.5) * vec2f(2.0 * U.aspect, -2.0);
-  let dist = length(unit - vp);
+  let wall = wallAt(unit);
+  let d = wall.x;
+  let th = wall.y;
   let boost = U.warpA.z;
   let b2 = boost * boost;
-  var col = vec3f(0.0006, 0.0010, 0.0022);
-  let tint = latticeColour();
+
+  // The cloud, turning with the lattice and drifting slowly of its own
+  // accord; a coarser field over it for the wisps, and slow bands of hue
+  // along the tunnel.
+  let along = (d + U.warpG.x) * 0.016 * (1.0 - 0.45 * boost);
+  let ring = vec2f(cos(th - U.warpA.w), sin(th - U.warpA.w));
+  let q = vec3f(ring * 1.5, along + U.time * 0.02);
+  let n1 = fbm3(q, 3);
+  let n2 = fbm3(q * vec3f(2.1, 2.1, 1.7) + vec3f(3.7, 1.9, 11.0 - U.time * 0.03), 2);
+  let veil = smoothstep(-0.30, 0.50, n1 + 0.45 * n2);
+  let hue = fbm3(vec3f(ring * 0.6, along * 0.35 + 7.0), 2);
+
+  // The spectrum at this angle - the slow one - lights the wall, the bass
+  // breathes it, the phrase fills it, a lull thins it.
+  let sp = spectrumAt(th - 0.2, th + 0.2);
+  let lit = 0.45 + 0.75 * pow(sp, 0.85);
+  let breath = 1.0 + 0.25 * U.bass;
+  let fill = mix(0.6, 1.0, U.warpE.z) * mix(1.0, 0.45, U.lull);
+  let depth = smoothstep(2.0, 16.0, d) * exp(-d / 150.0);
+  let gain = 0.11 * veil * lit * breath * fill * depth * (1.0 + 0.9 * b2);
+
+  let t = clamp(0.28 + 0.30 * veil + 0.12 * sp + 0.14 * hue, 0.0, 1.0);
   let accent = lightColour(0.94, 0.5);
-  // The far haze: a soft cone about the vanishing point.
+  var col = coolPalette(t, U.mood) * gain;
+  col += accent * (gain * 0.25 * smoothstep(0.6, 1.0, veil));
+
+  // Black under it all, and the core.
+  col += vec3f(0.0006, 0.0010, 0.0022);
+  let vp = (U.warpF.xy - 0.5) * vec2f(2.0 * U.aspect, -2.0);
+  let dist = length(unit - vp);
+  let tint = latticeColour();
   col += tint * (0.006 + 0.03 * b2 + 0.004 * U.warpE.z) * exp(-dist * 2.2);
-  // The core: hot and white at the centre, the accent at its fringe,
-  // swelling with the burn - short of a white-out, which the bloom and
-  // the tonemap would turn into a hard disc across the frame.
-  let rad = 0.07 + 0.06 * U.warpE.z + 0.26 * b2;
+  // Hot and white at the centre, the accent at its fringe, swelling with
+  // the burn - short of a white-out, which the bloom and the tonemap would
+  // turn into a hard disc across the frame.
+  let rad = 0.07 + 0.06 * U.warpE.z + 0.22 * b2;
   let g = exp(-(dist * dist) / (rad * rad));
-  let hot = 0.05 + 0.07 * U.warpE.z + 0.75 * b2 + 0.25 * U.warpE.y * b2;
+  let hot = 0.05 + 0.07 * U.warpE.z + 0.7 * b2 + 0.2 * U.warpE.y * b2;
   col += vec3f(1.0, 0.97, 0.92) * (g * g * hot) + mix(tint, accent, 0.5) * (g * hot * 0.35);
   return vec4f(col, 1.0);
 }
@@ -179,20 +234,25 @@ fn lineVertex(p : vec3f, pn : vec3f, side : f32, sigmaWorld : f32,
   return o;
 }
 
-/** The rings: a closed polygon every few units, each side lit by the
- *  spectrum at its angle, every fourth a gate - brighter, wider, the
- *  accent's colour. The lattice spins with the music and corkscrews along
- *  the travel. */
+/** The hoops: faint, wide circles of mist along the tunnel at no regular
+ *  interval - each sits off its station by up to forty percent, a fifth
+ *  are missing, every one its own brightness and size - lit softly by
+ *  the spectrum at each point of their circumference, a quarter of them
+ *  gates in the accent's colour. They dissolve before they reach the
+ *  frame's edge: a hoop rushing past as a bar across the frame was the
+ *  most intrusive thing in the piece. The lattice turns slowly and
+ *  corkscrews along the travel. */
 @vertex
 fn ringVs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> LineOut {
   let sc = U.warpA.x;
-  let m = floor((sc - 3.0) / RING_SPACING) + 1.0 + f32(ii);
-  let s = m * RING_SPACING;
-  let d = s - sc;
-  if (d < 1.5 || d > FAR) { return hiddenLine(); }
+  let m = floor((sc - 8.0) / RING_SPACING) + 1.0 + f32(ii);
   let mi = u32((i32(m) % i32(RINGS_PER_PERIOD) + i32(RINGS_PER_PERIOD)) % i32(RINGS_PER_PERIOD));
   let hr = hash3u(mi * 747796405u + 31u);
-  let gate = select(0.0, 1.0, (mi % 4u) == 0u);
+  let hr2 = hash3u(mi * 2654435761u + 37u);
+  let s = (m + (hr.z - 0.5) * 0.8) * RING_SPACING;
+  let d = s - sc;
+  if (d < 4.0 || d > FAR || hr2.x < 0.3) { return hiddenLine(); }
+  let gate = select(0.0, 1.0, hr2.y > 0.75);
 
   let j = vi / 2u;
   let side = f32(vi % 2u) * 2.0 - 1.0;
@@ -200,37 +260,33 @@ fn ringVs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) ->
   let arc = TAU / f32(SIDES);
   let theta = f32(jj) * arc + U.warpA.w + TWIST * s;
   let sp = spectrumAt(theta - 0.5 * arc, theta + 0.5 * arc);
-  // The ring breathes with the bass and bulges a little where the
-  // spectrum is loud, so the floor of the tunnel lifts on a kick.
-  let r = R * (1.0 + 0.05 * U.bass + 0.05 * sp);
+  // Each hoop its own size; all of them breathe with the bass.
+  let r = R * (1.0 + 0.06 * (hr.y - 0.5) + 0.04 * U.bass);
   let p = toView(tunnelPoint(d, vec2f(cos(theta), sin(theta)) * r));
   let pn = toView(tunnelPoint(d, vec2f(cos(theta + arc), sin(theta + arc)) * r));
   if (p.z < 0.5 || pn.z < 0.5) { return hiddenLine(); }
 
-  // Light. Far rings thin to sub-pixel and dim with it; the nearest fades
-  // before it fills the frame as a bar.
+  // Light: the spectrum around the hoop, softly; the phrase; a touch of
+  // the onset on the nearest; the waves. Far hoops thin to sub-pixel and
+  // dim with it; the near dissolve before they fill the frame.
   let fog = (1.0 - smoothstep(FAR * 0.5, FAR, d)) / (1.0 + d / 110.0);
-  let near = smoothstep(1.5, 6.0, d);
-  // The spectrum, with contrast: the loud sides of the ring shine and the
-  // quiet ones all but go, so the tunnel is a spectrum seen down its axis.
-  let lit = 0.14 + 1.25 * pow(sp, 1.1);
-  let level = 0.55 + 0.45 * clamp(U.level, 0.0, 1.2);
-  let beat = 1.0 + U.beat * exp(-U.beatAge * 6.0) * 0.6 * (1.0 - smoothstep(20.0, 120.0, d));
+  let near = smoothstep(8.0, 24.0, d);
+  let lit = 0.45 + 0.55 * pow(sp, 0.9);
+  let phrase = 0.6 + 0.4 * U.warpE.z;
+  let onset = 1.0 + U.onset * 0.25 * (1.0 - smoothstep(30.0, 120.0, d));
   let pulse = pulseAt(s);
   let boost = U.warpA.z;
-  let quiet = mix(1.0, 0.6, U.lull);
-  let own = mix(0.72, 1.0, hr.x) * (1.0 + gate * 0.6);
-  let alpha = 0.50 * lit * level * beat * (1.0 + 1.6 * pulse) * own * fog * near * quiet
-              * (1.0 + boost * 0.7) * (1.0 + U.warpE.y * 0.3);
+  let quiet = mix(1.0, 0.55, U.lull);
+  let own = mix(0.4, 1.0, hr.x) * (1.0 + gate * 0.8);
+  let alpha = 0.11 * lit * phrase * onset * (1.0 + 0.5 * pulse) * own * fog * near * quiet
+              * (1.0 + boost * 0.6);
 
   var col = latticeColour();
   let accent = lightColour(0.94, hr.y);
-  col = mix(col, accent, gate * (0.8 + 0.2 * U.warpE.w));
-  // The loud sides run to white; so do the pulses.
-  col = mix(col, vec3f(1.0, 0.96, 0.92), 0.30 * pow(sp, 1.5) + 0.5 * clamp(pulse, 0.0, 1.0));
-  // The loud sides are thicker as well as brighter.
-  let sigma = 0.045 * (1.0 + gate * 0.9) * (1.0 + 0.25 * boost) * (0.75 + 0.7 * sp);
-  return lineVertex(p, pn, side, sigma, alpha, col, 0.16);
+  col = mix(col, accent, gate * (0.75 + 0.25 * U.warpE.w));
+  col = mix(col, vec3f(1.0, 0.96, 0.92), 0.15 * pow(sp, 1.5) + 0.3 * clamp(pulse, 0.0, 1.0));
+  let sigma = 0.08 * (1.0 + gate * 0.5) * (1.0 + 0.3 * boost) * (0.85 + 0.3 * sp);
+  return lineVertex(p, pn, side, sigma, alpha, col, 0.35);
 }
 
 /** Distance ahead of the camera for rail sample j: dense near, sparse far. */
@@ -239,8 +295,8 @@ fn railDist(j : u32) -> f32 {
   return 1.5 + (FAR - 1.5) * pow(u, 1.8);
 }
 
-/** The rails: lines the length of the tunnel at the gates' corners, showing
- *  the bend and the corkscrew, with the beat's light running along them. */
+/** The threads: faint lines the length of the tunnel, showing the bend
+ *  and the corkscrew, with a slow flow of light running along them. */
 @vertex
 fn railVs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> LineOut {
   let nRails = u32(U.warpC.z);
@@ -265,24 +321,25 @@ fn railVs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) ->
   if (jn < j) { pn = p + (p - pn); }
 
   let fog = (1.0 - smoothstep(FAR * 0.45, FAR * 0.95, d)) / (1.0 + d / 90.0);
-  let near = smoothstep(1.5, 7.0, d);
-  // The spectrum at the rail's angle, gently: the rails are long and would
-  // otherwise flicker as a whole.
+  let near = smoothstep(2.0, 12.0, d);
+  // The spectrum at the thread's angle, gently: the threads are long and
+  // would otherwise flicker as a whole.
   let sp = spectrumAt(theta - 0.1, theta + 0.1);
-  let lit = 0.45 + 0.55 * pow(sp, 0.9);
+  let lit = 0.5 + 0.5 * pow(sp, 0.9);
   // Light running toward the lens, one wave per beat when the tempo is
-  // trusted; the pulses shooting the other way.
-  let flow = 0.78 + 0.22 * sin(d * 0.15 + U.warpC.y + hr.x * TAU);
+  // trusted, else at the mids' pace: a continuous flow, never a flash.
+  let flow = 0.84 + 0.16 * sin(d * 0.12 + U.warpC.y + hr.x * TAU);
   let pulse = pulseAt(s);
   let boost = U.warpA.z;
-  let level = 0.6 + 0.4 * clamp(U.level, 0.0, 1.2);
-  let quiet = mix(1.0, 0.55, U.lull);
-  let alpha = 0.30 * lit * flow * level * (1.0 + 2.0 * pulse) * fog * near * quiet
+  let phrase = 0.6 + 0.4 * U.warpE.z;
+  let quiet = mix(1.0, 0.5, U.lull);
+  let own = mix(0.45, 1.0, hr.y);
+  let alpha = 0.11 * lit * flow * phrase * (1.0 + 0.6 * pulse) * own * fog * near * quiet
               * (1.0 + boost * 0.9);
   var col = latticeColour();
-  col = mix(col, vec3f(1.0, 0.96, 0.92), 0.5 * clamp(pulse, 0.0, 1.0) + 0.2 * boost);
-  let sigma = 0.032 * (1.0 + 0.3 * boost);
-  return lineVertex(p, pn, side, sigma, alpha, col, 0.14);
+  col = mix(col, vec3f(1.0, 0.96, 0.92), 0.3 * clamp(pulse, 0.0, 1.0) + 0.2 * boost);
+  let sigma = 0.03 * (1.0 + 0.3 * boost);
+  return lineVertex(p, pn, side, sigma, alpha, col, 0.2);
 }
 
 @fragment
@@ -362,8 +419,11 @@ fn starVs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) ->
   let streakGain = pow((3.14159 * radiusPx * radiusPx)
                        / (3.14159 * radiusPx * radiusPx + 1.8 * radiusPx * halfLenPx), 0.45);
 
-  let depthFade = 1.0 - smoothstep(110.0, 260.0, p.z);
-  let depthDim = inverseSqrt(1.0 + (p.z / 60.0) * (p.z / 60.0));
+  // The dust inside the tube is for passing by: past a hundred units it
+  // all projects into one small disc at the vanishing point, so it goes
+  // long before the space outside does.
+  let depthFade = select(1.0 - smoothstep(90.0, 220.0, p.z), 1.0 - smoothstep(35.0, 100.0, p.z), inside);
+  let depthDim = inverseSqrt(1.0 + (p.z / 55.0) * (p.z / 55.0));
   let nearFade = smoothstep(0.4, 2.5, p.z);
   let brightVary = exp2(0.5 * (2.0 * h2.y - 1.0));
   // The highs sparkle the stars; a busy passage fills them in; a lull
